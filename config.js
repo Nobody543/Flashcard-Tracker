@@ -19,11 +19,12 @@
    ========================================================================= */
 
 const CONFIG = {
-  JSONBIN_BIN_ID: 'YOUR_BIN_ID_HERE',
-  JSONBIN_API_KEY: 'YOUR_API_KEY_HERE',
+  JSONBIN_BIN_ID: '6a36c782f5f4af5e29150fe3',
+  JSONBIN_API_KEY: '$2a$10$hW8GRX8MFA05OycfFwy0eOCylRevNEYeIqqHIBNQrHfIUrmU9i2kG',
 
+      
   // PIN required to open the teacher section.
-  TEACHER_PIN: '1234',
+  TEACHER_PIN: '2016',
 
   // If a study session is left open (e.g. browser closed without pressing
   // "End session") it will auto-close itself after this many hours, so logs
