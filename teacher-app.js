@@ -1,388 +1,305 @@
 /* =========================================================================
-   FLASHCARD TRACKER — SHARED STYLES
-   Quizlet-inspired: clean white surfaces, one confident blue, card-based
-   layout, soft shadows, rounded corners. Deep Learn areas lean purple to
-   keep it visually distinct from regular Study.
+   TEACHER APP
+   Student real names are stored ONLY in this browser's localStorage —
+   never written to the shared JSONBin data. The shared data only ever
+   contains anonymous student IDs.
    ========================================================================= */
 
-:root {
-  --bg: #F5F6FB;
-  --surface: #FFFFFF;
-  --surface-sunken: #F0F1F8;
-  --border: #E4E6F1;
+let data = null;
+let localNames = {};
+let selectedStudentId = null;
+let teacherActiveTab = 'sessions'; // 'sessions' | 'status'
+let toastTimeout = null;
 
-  --text: #161A30;
-  --text-muted: #6B7280;
-  --text-faint: #9CA3AF;
+document.addEventListener('DOMContentLoaded', init);
 
-  --blue: #4255FF;
-  --blue-dark: #2F3FE0;
-  --blue-tint: #EEF0FF;
-
-  --purple: #7C5CFC;
-  --purple-dark: #6A45F0;
-  --purple-tint: #F2EEFF;
-
-  --green: #16A34A;
-  --green-tint: #E8F8EE;
-  --orange: #F59E0B;
-  --orange-tint: #FEF3DD;
-  --red: #EF4444;
-  --red-tint: #FDE9E9;
-  --grey-tint: #EEF0F4;
-
-  --radius-sm: 8px;
-  --radius-md: 14px;
-  --radius-lg: 20px;
-  --shadow-sm: 0 1px 2px rgba(22, 26, 48, 0.06);
-  --shadow-md: 0 4px 16px rgba(22, 26, 48, 0.08);
-  --shadow-lg: 0 12px 32px rgba(22, 26, 48, 0.14);
-
-  --font-display: 'Plus Jakarta Sans', system-ui, sans-serif;
-  --font-body: 'Inter', system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', 'SFMono-Regular', monospace;
+async function init() {
+  loadLocalNames();
+  setupModalDismiss();
+  if (sessionStorage.getItem('teacher_unlocked') === 'true') {
+    await showTeacherApp();
+  } else {
+    document.getElementById('loading-screen').style.display = 'none';
+    document.getElementById('lock-screen').style.display = 'flex';
+    setupLock();
+  }
 }
 
-* { box-sizing: border-box; }
-html, body { margin: 0; padding: 0; }
-
-body {
-  background: var(--bg);
-  color: var(--text);
-  font-family: var(--font-body);
-  font-size: 15px;
-  line-height: 1.5;
-  -webkit-font-smoothing: antialiased;
+function setupLock() {
+  document.getElementById('pin-unlock-btn').addEventListener('click', async () => {
+    const val = document.getElementById('pin-input').value;
+    if (val === CONFIG.TEACHER_PIN) {
+      sessionStorage.setItem('teacher_unlocked', 'true');
+      document.getElementById('lock-screen').style.display = 'none';
+      await showTeacherApp();
+    } else {
+      document.getElementById('pin-error').style.display = 'block';
+    }
+  });
+  document.getElementById('pin-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('pin-unlock-btn').click();
+  });
 }
 
-h1, h2, h3, h4, button, .nav-label, .display {
-  font-family: var(--font-display);
+async function showTeacherApp() {
+  document.getElementById('loading-screen').style.display = 'none';
+  document.getElementById('lock-screen').style.display = 'none';
+  const loaded = await Storage.loadAll();
+  data = loaded.data;
+  document.getElementById('app').style.display = 'flex';
+  document.getElementById('add-student-btn').addEventListener('click', addStudent);
+  document.getElementById('refresh-btn').addEventListener('click', refreshData);
+  renderStudentList();
+  renderDashboardEmpty();
+  if (!Storage.isConfigured()) {
+    showToast('Set up JSONBin in js/config.js to sync data across your own devices and your student\'s device.');
+  }
 }
 
-h1, h2, h3, h4 { margin: 0 0 0.4em 0; font-weight: 700; letter-spacing: -0.01em; }
-h1 { font-size: 26px; }
-h2 { font-size: 20px; }
-h3 { font-size: 16px; }
-p { margin: 0 0 1em 0; }
-a { color: var(--blue); text-decoration: none; }
-.mono { font-family: var(--font-mono); }
-.muted { color: var(--text-muted); }
-.faint { color: var(--text-faint); }
-
-button {
-  cursor: pointer;
-  border: none;
-  font-size: 14px;
-  font-weight: 600;
-  border-radius: var(--radius-sm);
-  transition: transform 0.06s ease, box-shadow 0.15s ease, background 0.15s ease;
-}
-button:active { transform: scale(0.97); }
-button:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
-button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible {
-  outline: 2px solid var(--blue);
-  outline-offset: 2px;
+async function refreshData() {
+  const loaded = await Storage.loadAll();
+  data = loaded.data;
+  renderStudentList();
+  if (selectedStudentId && data.students[selectedStudentId]) renderDashboard();
+  showToast('Refreshed.');
 }
 
-.btn {
-  padding: 10px 18px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.btn-primary { background: var(--blue); color: #fff; }
-.btn-primary:hover { background: var(--blue-dark); }
-.btn-purple { background: var(--purple); color: #fff; }
-.btn-purple:hover { background: var(--purple-dark); }
-.btn-secondary { background: var(--surface-sunken); color: var(--text); }
-.btn-secondary:hover { background: var(--border); }
-.btn-ghost { background: transparent; color: var(--text-muted); }
-.btn-ghost:hover { background: var(--surface-sunken); }
-.btn-danger { background: var(--red-tint); color: var(--red); }
-.btn-danger:hover { background: #fbd5d5; }
-.btn-success { background: var(--green-tint); color: var(--green); }
-.btn-block { width: 100%; justify-content: center; }
-.btn-sm { padding: 6px 12px; font-size: 13px; }
-.btn-lg { padding: 14px 26px; font-size: 16px; }
-.btn-icon { padding: 8px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; }
+/* ---------------------------------------------------------------------- */
+/* Local name storage (teacher's browser only)                            */
+/* ---------------------------------------------------------------------- */
 
-input, textarea, select {
-  font-family: var(--font-body);
-  font-size: 14px;
-  padding: 10px 12px;
-  border: 1.5px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  color: var(--text);
-  width: 100%;
+function loadLocalNames() {
+  try { localNames = JSON.parse(localStorage.getItem('teacher_student_names') || '{}'); }
+  catch (e) { localNames = {}; }
 }
-textarea { font-family: var(--font-mono); font-size: 13px; resize: vertical; min-height: 160px; }
-label { font-size: 13px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 6px; }
-.field { margin-bottom: 16px; }
-
-.card {
-  background: var(--surface);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-sm);
-  border: 1px solid var(--border);
-  padding: 20px;
+function saveLocalNames() {
+  localStorage.setItem('teacher_student_names', JSON.stringify(localNames));
 }
 
-/* ---------- App shell: fixed sidebar + main content ---------- */
-.app-shell { display: flex; min-height: 100vh; }
+/* ---------------------------------------------------------------------- */
+/* Persistence / small UI helpers                                         */
+/* ---------------------------------------------------------------------- */
 
-.sidebar {
-  width: 230px;
-  flex-shrink: 0;
-  background: var(--surface);
-  border-right: 1px solid var(--border);
-  padding: 22px 16px;
-  display: flex;
-  flex-direction: column;
-  position: fixed;
-  top: 0; left: 0; bottom: 0;
-  z-index: 20;
-}
-.sidebar-brand {
-  font-size: 18px;
-  font-weight: 800;
-  margin-bottom: 28px;
-  padding: 0 8px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.sidebar-brand .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--blue); display: inline-block; }
-.nav-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 11px 12px;
-  border-radius: var(--radius-sm);
-  color: var(--text-muted);
-  font-weight: 600;
-  font-size: 14px;
-  cursor: pointer;
-  margin-bottom: 4px;
-  background: none;
-  width: 100%;
-  text-align: left;
-}
-.nav-item:hover { background: var(--surface-sunken); color: var(--text); }
-.nav-item.active { background: var(--blue-tint); color: var(--blue-dark); }
-.nav-item.deep.active { background: var(--purple-tint); color: var(--purple-dark); }
-.sidebar-spacer { flex: 1; }
-.sidebar-foot { font-size: 12px; color: var(--text-faint); padding: 0 8px; }
-
-.main {
-  margin-left: 230px;
-  flex: 1;
-  min-width: 0;
+async function persist() {
+  try { await Storage.saveAll(data); } catch (e) { console.warn('Save failed', e); }
 }
 
-.topbar {
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-  padding: 14px 28px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  position: sticky;
-  top: 0;
-  z-index: 10;
+function setupModalDismiss() {
+  document.getElementById('modal-overlay').addEventListener('click', (e) => {
+    if (e.target.id === 'modal-overlay') closeModal();
+  });
 }
-.session-control { display: flex; align-items: center; gap: 12px; }
-.session-timer { font-family: var(--font-mono); font-size: 14px; color: var(--text-muted); }
-.session-timer.live { color: var(--green); font-weight: 700; }
-
-.content {
-  padding: 28px;
-  max-width: 1000px;
+function openModal(html) {
+  document.getElementById('modal-content').innerHTML = html;
+  document.getElementById('modal-overlay').classList.remove('hidden');
+}
+function closeModal() {
+  document.getElementById('modal-overlay').classList.add('hidden');
+}
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.add('show');
+  clearTimeout(toastTimeout);
+  toastTimeout = setTimeout(() => t.classList.remove('show'), 3600);
+}
+function studentLink(id) {
+  return `${window.location.origin}${window.location.pathname.replace('teacher.html', 'student.html')}?id=${id}`;
 }
 
-.view { display: none; }
-.view.active { display: block; }
+/* ---------------------------------------------------------------------- */
+/* Student list / add / rename / delete                                   */
+/* ---------------------------------------------------------------------- */
 
-/* ---------- Deck grid ---------- */
-.deck-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
-  gap: 16px;
-  margin-top: 18px;
+function renderStudentList() {
+  const list = document.getElementById('student-list');
+  const ids = Object.keys(data.students);
+  list.innerHTML = '';
+  if (ids.length === 0) {
+    list.innerHTML = '<p class="muted" style="padding:0 8px; font-size:13px;">No students yet — add one below.</p>';
+    return;
+  }
+  ids.forEach(id => {
+    const name = localNames[id];
+    const btn = document.createElement('button');
+    btn.className = 'nav-item' + (id === selectedStudentId ? ' active' : '');
+    btn.textContent = name || 'Unnamed student';
+    if (!name) btn.style.fontStyle = 'italic';
+    btn.addEventListener('click', () => selectStudent(id));
+    list.appendChild(btn);
+  });
 }
-.deck-tile {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  padding: 18px;
-  cursor: pointer;
-  box-shadow: var(--shadow-sm);
-  transition: box-shadow 0.15s ease, transform 0.1s ease;
+
+async function addStudent() {
+  const newId = Utils.genId('s', 8);
+  Storage.ensureStudent(data, newId);
+  await persist();
+  renderStudentList();
+  openNamePrompt(newId, true);
 }
-.deck-tile:hover { box-shadow: var(--shadow-md); transform: translateY(-2px); }
-.deck-tile h3 { margin-bottom: 10px; }
-.deck-tile .deck-meta { font-size: 13px; color: var(--text-muted); display: flex; gap: 12px; }
-.deck-tile-new {
-  display: flex; align-items: center; justify-content: center;
-  border: 2px dashed var(--border); color: var(--text-muted);
-  font-weight: 700; font-size: 15px; min-height: 92px;
-  background: transparent;
+
+function openNamePrompt(studentId, isNew) {
+  const link = studentLink(studentId);
+  openModal(`
+    <h2>${isNew ? 'New student added' : 'Rename student'}</h2>
+    <div class="field">
+      <label>Name — stored only in your browser, never sent anywhere</label>
+      <input type="text" id="name-input" value="${Utils.escapeHtml(localNames[studentId] || '')}" placeholder="e.g. Alex P." />
+    </div>
+    ${isNew ? `
+    <div class="field">
+      <label>Their personal link — send this to them</label>
+      <input type="text" id="link-display" value="${link}" readonly />
+      <button class="btn btn-secondary btn-sm mt-sm" id="copy-link-btn">Copy link</button>
+    </div>` : ''}
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="name-cancel-btn">Cancel</button>
+      <button class="btn btn-primary" id="name-save-btn">Save</button>
+    </div>
+  `);
+  if (isNew) {
+    document.getElementById('copy-link-btn').addEventListener('click', () => {
+      navigator.clipboard.writeText(link).then(() => showToast('Link copied.'));
+    });
+  }
+  document.getElementById('name-cancel-btn').addEventListener('click', closeModal);
+  document.getElementById('name-save-btn').addEventListener('click', () => {
+    const val = document.getElementById('name-input').value.trim();
+    if (val) localNames[studentId] = val; else delete localNames[studentId];
+    saveLocalNames();
+    closeModal();
+    renderStudentList();
+    if (selectedStudentId === studentId) renderDashboard();
+  });
 }
-.deck-tile-new:hover { border-color: var(--blue); color: var(--blue); background: var(--blue-tint); }
 
-.mastery-bar { display: flex; height: 6px; border-radius: 4px; overflow: hidden; margin-top: 10px; background: var(--grey-tint); }
-.mastery-bar span { display: block; height: 100%; }
-
-/* ---------- Status dots / badges ---------- */
-.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
-.dot-new { background: var(--text-faint); }
-.dot-green { background: var(--green); }
-.dot-orange { background: var(--orange); }
-.dot-red { background: var(--red); }
-
-.badge {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 12px; font-weight: 700; padding: 4px 10px; border-radius: 999px;
+function selectStudent(id) {
+  selectedStudentId = id;
+  teacherActiveTab = 'sessions';
+  renderStudentList();
+  renderDashboard();
 }
-.badge-green { background: var(--green-tint); color: var(--green); }
-.badge-orange { background: var(--orange-tint); color: var(--orange); }
-.badge-red { background: var(--red-tint); color: var(--red); }
-.badge-new { background: var(--grey-tint); color: var(--text-muted); }
-.badge-purple { background: var(--purple-tint); color: var(--purple-dark); }
-.badge-blue { background: var(--blue-tint); color: var(--blue-dark); }
 
-/* ---------- Card list (browse / star) ---------- */
-.card-row {
-  display: flex; align-items: center; gap: 12px;
-  padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-sm);
-  background: var(--surface); margin-bottom: 8px;
+/* ---------------------------------------------------------------------- */
+/* Dashboard                                                              */
+/* ---------------------------------------------------------------------- */
+
+function renderDashboardEmpty() {
+  document.getElementById('dashboard-area').innerHTML = `
+    <div class="empty-state">
+      <h3>Select a student</h3>
+      <p>Choose a student on the left, or add a new one to get started.</p>
+    </div>`;
 }
-.card-row .term { font-weight: 700; flex: 1; min-width: 0; }
-.card-row .definition { flex: 1; color: var(--text-muted); min-width: 0; }
-.card-row .term, .card-row .definition { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.star-btn { background: none; border: none; font-size: 18px; color: var(--text-faint); cursor: pointer; line-height: 1; padding: 4px; }
-.star-btn.starred { color: var(--orange); }
 
-/* ---------- Flashcard (study) ---------- */
-.study-wrap { display: flex; flex-direction: column; align-items: center; }
-.study-progress { width: 100%; max-width: 560px; margin-bottom: 18px; }
-.progress-track { height: 6px; background: var(--grey-tint); border-radius: 4px; overflow: hidden; }
-.progress-fill { height: 100%; background: var(--blue); transition: width 0.2s ease; }
-.progress-label { font-size: 13px; color: var(--text-muted); margin-top: 6px; display: flex; justify-content: space-between; }
+function renderDashboard() {
+  const student = data.students[selectedStudentId];
+  if (!student) { renderDashboardEmpty(); return; }
+  const name = localNames[selectedStudentId] || 'Unnamed student';
+  const totalSeconds = student.sessionLogs.reduce((sum, l) => sum + l.durationSeconds, 0);
+  const totalCards = student.sessionLogs.reduce((sum, l) => sum + l.cardsStudied, 0);
 
-.flashcard-scene { width: 100%; max-width: 560px; height: 320px; perspective: 1400px; margin-bottom: 22px; }
-.flashcard {
-  position: relative; width: 100%; height: 100%;
-  transform-style: preserve-3d; transition: transform 0.45s cubic-bezier(.4,.2,.2,1);
-  cursor: pointer;
+  const area = document.getElementById('dashboard-area');
+  area.innerHTML = `
+    <div class="row-between" style="flex-wrap:wrap; gap:10px;">
+      <div>
+        <h1>${Utils.escapeHtml(name)}</h1>
+        <p class="mono faint" style="margin:0;">${selectedStudentId}</p>
+      </div>
+      <div class="row gap-sm">
+        <button class="btn btn-secondary btn-sm" id="rename-btn">Rename</button>
+        <button class="btn btn-secondary btn-sm" id="copy-link-btn2">Copy link</button>
+        <button class="btn btn-danger btn-sm" id="delete-student-btn">Delete data</button>
+      </div>
+    </div>
+    ${student.activeSession ? `<div class="badge badge-green mt-sm">● Session in progress — started ${Utils.formatTime(student.activeSession.startedAt)}</div>` : ''}
+    <div class="dl-stat-grid" style="grid-template-columns:repeat(4,1fr);">
+      <div class="dl-stat-card" style="background:var(--blue-tint);"><div class="num" style="color:var(--blue-dark);">${Utils.formatDuration(totalSeconds)}</div><div class="lbl" style="color:var(--blue-dark);">Total time</div></div>
+      <div class="dl-stat-card" style="background:var(--blue-tint);"><div class="num" style="color:var(--blue-dark);">${student.sessionLogs.length}</div><div class="lbl" style="color:var(--blue-dark);">Sessions</div></div>
+      <div class="dl-stat-card" style="background:var(--blue-tint);"><div class="num" style="color:var(--blue-dark);">${totalCards}</div><div class="lbl" style="color:var(--blue-dark);">Cards studied</div></div>
+      <div class="dl-stat-card" style="background:var(--blue-tint);"><div class="num" style="color:var(--blue-dark);">${student.decks.length}</div><div class="lbl" style="color:var(--blue-dark);">Decks</div></div>
+    </div>
+
+    <div class="row gap-sm mt-lg">
+      <button class="btn ${teacherActiveTab === 'sessions' ? 'btn-primary' : 'btn-secondary'} btn-sm" id="tab-sessions-btn">Session log</button>
+      <button class="btn ${teacherActiveTab === 'status' ? 'btn-primary' : 'btn-secondary'} btn-sm" id="tab-status-btn">Flashcard status</button>
+    </div>
+    <div id="tab-content" class="mt-md"></div>
+  `;
+
+  document.getElementById('rename-btn').addEventListener('click', () => openNamePrompt(selectedStudentId, false));
+  document.getElementById('copy-link-btn2').addEventListener('click', () =>
+    navigator.clipboard.writeText(studentLink(selectedStudentId)).then(() => showToast('Link copied.')));
+  document.getElementById('delete-student-btn').addEventListener('click', async () => {
+    if (!confirm(`Permanently delete all flashcard data for "${name}"? This can't be undone.`)) return;
+    delete data.students[selectedStudentId];
+    delete localNames[selectedStudentId];
+    saveLocalNames();
+    await persist();
+    selectedStudentId = null;
+    renderStudentList();
+    renderDashboardEmpty();
+  });
+  document.getElementById('tab-sessions-btn').addEventListener('click', () => { teacherActiveTab = 'sessions'; renderDashboard(); });
+  document.getElementById('tab-status-btn').addEventListener('click', () => { teacherActiveTab = 'status'; renderDashboard(); });
+
+  if (teacherActiveTab === 'sessions') renderSessionLogTab(student);
+  else renderStatusTab(student);
 }
-.flashcard.flipped { transform: rotateY(180deg); }
-.flashcard-face {
-  position: absolute; inset: 0; backface-visibility: hidden;
-  border-radius: var(--radius-lg); border: 1px solid var(--border);
-  background: var(--surface); box-shadow: var(--shadow-md);
-  display: flex; align-items: center; justify-content: center;
-  padding: 36px; text-align: center;
+
+function renderSessionLogTab(student) {
+  const container = document.getElementById('tab-content');
+  if (student.sessionLogs.length === 0) {
+    container.innerHTML = '<div class="empty-state"><h3>No sessions logged yet</h3><p>This fills in once they press "Start session" / "End session" on their own device.</p></div>';
+    return;
+  }
+  const rows = student.sessionLogs.slice().reverse().map(log => `
+    <tr>
+      <td>${Utils.formatDate(log.startedAt)}</td>
+      <td>${Utils.formatTime(log.startedAt)} – ${Utils.formatTime(log.endedAt)}</td>
+      <td>${Utils.formatDuration(log.durationSeconds)}</td>
+      <td>${log.cardsStudied}</td>
+      <td>${log.autoClosed ? '<span class="badge badge-orange">Auto-closed</span>' : ''}</td>
+    </tr>
+  `).join('');
+  container.innerHTML = `
+    <table>
+      <thead><tr><th>Date</th><th>Time</th><th>Duration</th><th>Cards studied</th><th></th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
 }
-.flashcard-face .face-text { font-size: 24px; font-weight: 700; font-family: var(--font-display); }
-.flashcard-face .face-label {
-  position: absolute; top: 16px; left: 20px; font-size: 11px; font-weight: 700;
-  text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-faint);
-}
-.flashcard-back { transform: rotateY(180deg); background: var(--blue-tint); }
-.flashcard-back .face-text { color: var(--blue-dark); font-weight: 600; font-size: 20px; }
-.flashcard.deep .flashcard-back { background: var(--purple-tint); }
-.flashcard.deep .flashcard-back .face-text { color: var(--purple-dark); }
-.flip-hint { font-size: 13px; color: var(--text-faint); margin-bottom: 18px; }
 
-.study-actions { display: flex; gap: 14px; }
-.study-actions button { min-width: 150px; padding: 14px 20px; font-size: 15px; }
-
-.star-toggle-inline {
-  display: flex; align-items: center; gap: 6px; margin-top: 16px;
-  color: var(--text-muted); font-size: 13px; cursor: pointer; background: none; border: none;
-}
-.star-toggle-inline.starred { color: var(--orange); }
-
-/* ---------- Round summary ---------- */
-.summary-box { text-align: center; max-width: 460px; margin: 0 auto; }
-.summary-stat-row { display: flex; justify-content: center; gap: 28px; margin: 22px 0; }
-.summary-stat { text-align: center; }
-.summary-stat .num { font-size: 30px; font-weight: 800; font-family: var(--font-display); }
-.summary-stat .lbl { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
-.summary-actions { display: flex; flex-direction: column; gap: 10px; margin-top: 18px; }
-
-/* ---------- Deep learn dashboard ---------- */
-.dl-stat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 20px 0; }
-.dl-stat-card { background: var(--purple-tint); border-radius: var(--radius-md); padding: 18px; text-align: center; }
-.dl-stat-card .num { font-size: 26px; font-weight: 800; color: var(--purple-dark); font-family: var(--font-display); }
-.dl-stat-card .lbl { font-size: 12px; color: var(--purple-dark); opacity: 0.8; margin-top: 4px; }
-.dl-action-list { display: flex; flex-direction: column; gap: 10px; margin-top: 8px; }
-.dl-action {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 16px 18px; border: 1px solid var(--border); border-radius: var(--radius-md);
-  background: var(--surface);
-}
-.dl-action .ti { font-weight: 700; }
-.dl-action .sub { font-size: 13px; color: var(--text-muted); margin-top: 2px; }
-
-/* ---------- Modal ---------- */
-.modal-overlay {
-  position: fixed; inset: 0; background: rgba(22,26,48,0.5);
-  display: flex; align-items: center; justify-content: center; z-index: 100;
-  padding: 20px;
-}
-.modal-overlay.hidden { display: none; }
-.modal {
-  background: var(--surface); border-radius: var(--radius-lg); padding: 26px;
-  width: 100%; max-width: 520px; max-height: 86vh; overflow-y: auto;
-  box-shadow: var(--shadow-lg);
-}
-.modal-wide { max-width: 760px; }
-.modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
-
-/* ---------- Toast ---------- */
-.toast {
-  position: fixed; bottom: 24px; right: 24px; background: var(--text); color: #fff;
-  padding: 12px 18px; border-radius: var(--radius-sm); font-size: 14px;
-  box-shadow: var(--shadow-lg); z-index: 200; opacity: 0; transform: translateY(8px);
-  transition: opacity 0.2s ease, transform 0.2s ease; max-width: 320px;
-}
-.toast.show { opacity: 1; transform: translateY(0); }
-
-/* ---------- Empty states ---------- */
-.empty-state { text-align: center; padding: 50px 20px; color: var(--text-muted); }
-.empty-state h3 { color: var(--text); }
-
-/* ---------- Tables (teacher) ---------- */
-table { width: 100%; border-collapse: collapse; font-size: 14px; }
-th { text-align: left; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-faint); padding: 8px 12px; border-bottom: 1px solid var(--border); }
-td { padding: 10px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
-tr:last-child td { border-bottom: none; }
-.deck-section-title { margin: 26px 0 10px 0; display: flex; align-items: center; gap: 10px; }
-
-/* ---------- Misc layout helpers ---------- */
-.row { display: flex; align-items: center; gap: 10px; }
-.row-between { display: flex; align-items: center; justify-content: space-between; }
-.gap-sm { gap: 8px; } .gap-md { gap: 14px; }
-.mt-sm { margin-top: 8px; } .mt-md { margin-top: 16px; } .mt-lg { margin-top: 28px; }
-.section-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
-
-/* ---------- Login / lock screens ---------- */
-.center-screen { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
-.lock-card { width: 100%; max-width: 380px; text-align: center; }
-.lock-card .dot-logo { width: 44px; height: 44px; border-radius: 12px; background: var(--blue); margin: 0 auto 16px; }
-
-/* ---------- Responsive ---------- */
-@media (max-width: 760px) {
-  .sidebar { width: 100%; height: auto; position: static; flex-direction: row; padding: 12px 10px; border-right: none; border-bottom: 1px solid var(--border); overflow-x: auto; }
-  .sidebar-brand { display: none; }
-  .nav-item { flex-direction: column; gap: 4px; font-size: 11px; padding: 8px 14px; white-space: nowrap; }
-  .sidebar-spacer, .sidebar-foot { display: none; }
-  .main { margin-left: 0; }
-  .content { padding: 18px; }
-  .dl-stat-grid { grid-template-columns: 1fr 1fr 1fr; gap: 8px; }
-  .flashcard-scene { height: 260px; }
-  .study-actions { flex-direction: column; width: 100%; }
-  .study-actions button { width: 100%; }
+function renderStatusTab(student) {
+  const container = document.getElementById('tab-content');
+  if (student.decks.length === 0) {
+    container.innerHTML = '<div class="empty-state"><h3>No decks yet</h3><p>Nothing to show until they create a deck.</p></div>';
+    return;
+  }
+  const labelMap = { green: 'Mastered', orange: 'Recently correct', red: 'Needs practice', new: 'Not studied yet' };
+  let html = '';
+  student.decks.forEach((deck, di) => {
+    const rows = deck.cards.map((card, ci) => {
+      const status = Utils.cardStatus(card);
+      return `
+        <tr>
+          <td>${ci + 1}</td>
+          <td>${Utils.escapeHtml(card.term)}</td>
+          <td class="muted">${Utils.escapeHtml(card.definition)}</td>
+          <td><span class="badge badge-${status}">${labelMap[status]}</span></td>
+          <td>${card.timesSeen}</td>
+          <td>${card.timesCorrect}</td>
+          <td>${Utils.formatDate(card.lastSeenAt)}</td>
+          <td>${card.starred ? '★' : ''}</td>
+        </tr>`;
+    }).join('');
+    html += `
+      <div class="deck-section-title"><h3>Deck ${di + 1} — ${Utils.escapeHtml(deck.title)}</h3><span class="muted">(${deck.cards.length} cards)</span></div>
+      <table>
+        <thead><tr><th>#</th><th>Term</th><th>Definition</th><th>Status</th><th>Seen</th><th>Correct</th><th>Last seen</th><th>★</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="8" class="muted">No cards in this deck.</td></tr>'}</tbody>
+      </table>
+    `;
+  });
+  container.innerHTML = html;
 }
