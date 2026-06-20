@@ -1,115 +1,32 @@
 /* =========================================================================
-   STORAGE
-   Single source of truth is one JSON "bin" on JSONBin.io shaped like:
-   { "students": { "<studentId>": { decks, deepLearnSettings, sessionLogs,
-                                     activeSession } } }
+   CONFIG
+   Fill these in to enable cross-device sync (so you can see your tutee's
+   progress from a different computer/phone than the one they study on).
 
-   Every load fetches the whole bin; every save writes the whole bin back.
-   This is simple and fine for one tutor with a handful of students, but it
-   means two simultaneous writes (e.g. student studying while teacher has
-   the dashboard open) could clobber each other. For this use-case that risk
-   is low, but worth knowing about.
+   SET-UP STEPS:
+   1. Go to https://jsonbin.io and create a free account.
+   2. Click "Create Bin". Paste this as the starting content:
+        { "students": {} }
+   3. Copy the "Bin ID" shown in the URL/dashboard into JSONBIN_BIN_ID below.
+   4. Go to Account -> API Keys, copy your "X-Master-Key" into
+      JSONBIN_API_KEY below.
+   5. Change TEACHER_PIN to something only you know.
 
-   If JSONBin isn't configured (see config.js), everything still works
-   using localStorage only, on that one device/browser.
+   If you leave JSONBIN_BIN_ID / JSONBIN_API_KEY as the placeholder values,
+   the site still works, but data is only stored in the browser it was
+   created in (no cross-device sync, and you won't be able to see the
+   student's data from your own device).
    ========================================================================= */
 
-const Storage = (() => {
-  const LOCAL_KEY = 'flashcard_tracker_data_v1';
+const CONFIG = {
+  JSONBIN_BIN_ID: 'YOUR_BIN_ID_HERE',
+  JSONBIN_API_KEY: 'YOUR_API_KEY_HERE',
 
-  function emptyData() {
-    return { students: {} };
-  }
+  // PIN required to open the teacher section.
+  TEACHER_PIN: '1234',
 
-  function loadLocal() {
-    try {
-      const raw = localStorage.getItem(LOCAL_KEY);
-      return raw ? JSON.parse(raw) : emptyData();
-    } catch (e) {
-      console.warn('Could not read local data, starting fresh.', e);
-      return emptyData();
-    }
-  }
-
-  function saveLocal(data) {
-    try {
-      localStorage.setItem(LOCAL_KEY, JSON.stringify(data));
-    } catch (e) {
-      console.warn('Could not write local data.', e);
-    }
-  }
-
-  function isConfigured() {
-    return Boolean(
-      CONFIG.JSONBIN_BIN_ID &&
-      CONFIG.JSONBIN_API_KEY &&
-      CONFIG.JSONBIN_BIN_ID !== '6a36c782f5f4af5e29150fe3' &&
-      CONFIG.JSONBIN_API_KEY !== '$2a$10$hW8GRX8MFA05OycfFwy0eOCylRevNEYeIqqHIBNQrHfIUrmU9i2kG'
-    );
-  }
-
-  async function fetchRemote() {
-    const res = await fetch(`https://api.jsonbin.io/v3/b/${CONFIG.JSONBIN_BIN_ID}/latest`, {
-      headers: { 'X-Master-Key': CONFIG.JSONBIN_API_KEY }
-    });
-    if (!res.ok) throw new Error('JSONBin fetch failed: ' + res.status);
-    const json = await res.json();
-    return json.record || emptyData();
-  }
-
-  async function saveRemote(data) {
-    const res = await fetch(`https://api.jsonbin.io/v3/b/${CONFIG.JSONBIN_BIN_ID}`, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Master-Key': CONFIG.JSONBIN_API_KEY
-      },
-      body: JSON.stringify(data)
-    });
-    if (!res.ok) throw new Error('JSONBin save failed: ' + res.status);
-    return true;
-  }
-
-  // Loads the freshest data available. Always also returns a `synced` flag
-  // so the UI can show a small "offline / not synced" indicator if needed.
-  async function loadAll() {
-    if (isConfigured()) {
-      try {
-        const remote = await fetchRemote();
-        saveLocal(remote);
-        return { data: remote, synced: true };
-      } catch (e) {
-        console.warn('Falling back to local data (could not reach JSONBin):', e);
-      }
-    }
-    return { data: loadLocal(), synced: false };
-  }
-
-  async function saveAll(data) {
-    saveLocal(data);
-    if (isConfigured()) {
-      try {
-        await saveRemote(data);
-        return true;
-      } catch (e) {
-        console.warn('Remote save failed, kept locally only:', e);
-        return false;
-      }
-    }
-    return true;
-  }
-
-  function ensureStudent(data, studentId) {
-    if (!data.students[studentId]) {
-      data.students[studentId] = {
-        decks: [],
-        deepLearnSettings: { dailyNewCardTarget: null, dateKey: null, introducedToday: 0 },
-        sessionLogs: [],
-        activeSession: null
-      };
-    }
-    return data.students[studentId];
-  }
-
-  return { loadAll, saveAll, isConfigured, ensureStudent, emptyData };
-})();
+  // If a study session is left open (e.g. browser closed without pressing
+  // "End session") it will auto-close itself after this many hours, so logs
+  // don't get stuck open forever.
+  SESSION_AUTO_CLOSE_HOURS: 4
+};
