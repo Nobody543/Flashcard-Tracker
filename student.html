@@ -6,25 +6,79 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
-  <div class="center-screen">
-    <div class="lock-card card" style="max-width:440px;">
+
+  <div id="loading-screen" class="center-screen">
+    <p class="muted">Loading your flashcards…</p>
+  </div>
+
+  <div id="no-id-screen" class="center-screen" style="display:none;">
+    <div class="lock-card card">
       <div class="dot-logo"></div>
-      <h2>Flashcards</h2>
-      <p class="muted">This site has two entry points:</p>
-      <div class="field" style="text-align:left;">
-        <label>Students</label>
-        <p class="muted" style="margin-top:-4px;">Use the personal link your tutor sent you — it looks like
-          <span class="mono">student.html?id=yourcode</span>. There's nothing to access here directly.</p>
+      <h2>No student link found</h2>
+      <p class="muted">Ask your tutor for your personal flashcards link — it should look like
+        <br><span class="mono">student.html?id=yourcode</span></p>
+    </div>
+  </div>
+
+  <div id="app" class="app-shell" style="display:none;">
+    <nav class="sidebar">
+      <div class="sidebar-brand"><span class="dot"></span> Flashcards</div>
+      <button class="nav-item active" data-nav="decks">📚 Decks</button>
+      <button class="nav-item deep" data-nav="deepLearn">🧠 Deep Learn</button>
+      <div class="sidebar-spacer"></div>
+      <div class="sidebar-foot mono" id="student-id-label"></div>
+    </nav>
+
+    <div class="main">
+      <div class="topbar">
+        <div id="topbar-title" style="font-weight:700;">Your decks</div>
+        <div class="session-control">
+          <span class="session-timer" id="session-timer"></span>
+          <button class="btn btn-primary btn-sm" id="session-toggle-btn">Start session</button>
+        </div>
       </div>
-      <div class="field" style="text-align:left;">
-        <label>Tutor</label>
-        <a href="teacher.html"><button class="btn btn-primary btn-block">Open teacher dashboard</button></a>
+
+      <div class="content">
+
+        <!-- DECKS -->
+        <div class="view active" id="view-decks">
+          <h1>Your decks</h1>
+          <p class="muted" id="decks-empty-hint" style="display:none;">No decks yet — create your first one below.</p>
+          <div class="deck-grid" id="deck-grid"></div>
+        </div>
+
+        <!-- DECK EDITOR -->
+        <div class="view" id="view-deck-editor"></div>
+
+        <!-- DECK DETAIL (browse / star) -->
+        <div class="view" id="view-deck-detail"></div>
+
+        <!-- STUDY SESSION (shared by Study + Deep Learn) -->
+        <div class="view" id="view-study"></div>
+
+        <!-- ROUND SUMMARY -->
+        <div class="view" id="view-summary"></div>
+
+        <!-- DEEP LEARN HOME -->
+        <div class="view" id="view-deep-learn"></div>
+
       </div>
     </div>
   </div>
+
+  <div class="modal-overlay hidden" id="modal-overlay">
+    <div class="modal" id="modal-content"></div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="js/config.js"></script>
+  <script src="js/storage.js"></script>
+  <script src="js/utils.js"></script>
+  <script src="js/student-app.js"></script>
 </body>
 </html>
