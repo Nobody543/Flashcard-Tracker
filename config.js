@@ -43,8 +43,8 @@ const Storage = (() => {
     return Boolean(
       CONFIG.JSONBIN_BIN_ID &&
       CONFIG.JSONBIN_API_KEY &&
-      CONFIG.JSONBIN_BIN_ID !== 'YOUR_BIN_ID_HERE' &&
-      CONFIG.JSONBIN_API_KEY !== 'YOUR_API_KEY_HERE'
+      CONFIG.JSONBIN_BIN_ID !== '6a36c782f5f4af5e29150fe3' &&
+      CONFIG.JSONBIN_API_KEY !== '$2a$10$hW8GRX8MFA05OycfFwy0eOCylRevNEYeIqqHIBNQrHfIUrmU9i2kG'
     );
   }
 
