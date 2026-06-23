@@ -6,15 +6,13 @@
    ========================================================================= */
 
 let data = null;
-let localNames = {};
 let selectedStudentId = null;
-let teacherActiveTab = 'sessions'; // 'sessions' | 'status'
+let teacherActiveTab = 'sessions'; // 'sessions' | 'status' | 'decks'
 let toastTimeout = null;
 
 document.addEventListener('DOMContentLoaded', init);
 
 async function init() {
-  loadLocalNames();
   setupModalDismiss();
   if (sessionStorage.getItem('teacher_unlocked') === 'true') {
     await showTeacherApp();
@@ -65,18 +63,6 @@ async function refreshData() {
 }
 
 /* ---------------------------------------------------------------------- */
-/* Local name storage (teacher's browser only)                            */
-/* ---------------------------------------------------------------------- */
-
-function loadLocalNames() {
-  try { localNames = JSON.parse(localStorage.getItem('teacher_student_names') || '{}'); }
-  catch (e) { localNames = {}; }
-}
-function saveLocalNames() {
-  localStorage.setItem('teacher_student_names', JSON.stringify(localNames));
-}
-
-/* ---------------------------------------------------------------------- */
 /* Persistence / small UI helpers                                         */
 /* ---------------------------------------------------------------------- */
 
@@ -120,7 +106,7 @@ function renderStudentList() {
     return;
   }
   ids.forEach(id => {
-    const name = localNames[id];
+    const name = data.students[id].name;
     const btn = document.createElement('button');
     btn.className = 'nav-item' + (id === selectedStudentId ? ' active' : '');
     btn.textContent = name || 'Unnamed student';
@@ -132,7 +118,8 @@ function renderStudentList() {
 
 async function addStudent() {
   const newId = Utils.genId('s', 8);
-  Storage.ensureStudent(data, newId);
+  const student = Storage.ensureStudent(data, newId);
+  student.name = null;
   await persist();
   renderStudentList();
   openNamePrompt(newId, true);
@@ -143,8 +130,8 @@ function openNamePrompt(studentId, isNew) {
   openModal(`
     <h2>${isNew ? 'New student added' : 'Rename student'}</h2>
     <div class="field">
-      <label>Name — stored only in your browser, never sent anywhere</label>
-      <input type="text" id="name-input" value="${Utils.escapeHtml(localNames[studentId] || '')}" placeholder="e.g. Alex P." />
+      <label>Name</label>
+      <input type="text" id="name-input" value="${Utils.escapeHtml(data.students[studentId].name || '')}" placeholder="e.g. Alex P." />
     </div>
     ${isNew ? `
     <div class="field">
@@ -163,10 +150,10 @@ function openNamePrompt(studentId, isNew) {
     });
   }
   document.getElementById('name-cancel-btn').addEventListener('click', closeModal);
-  document.getElementById('name-save-btn').addEventListener('click', () => {
+  document.getElementById('name-save-btn').addEventListener('click', async () => {
     const val = document.getElementById('name-input').value.trim();
-    if (val) localNames[studentId] = val; else delete localNames[studentId];
-    saveLocalNames();
+    data.students[studentId].name = val || null;
+    await persist();
     closeModal();
     renderStudentList();
     if (selectedStudentId === studentId) renderDashboard();
@@ -195,7 +182,7 @@ function renderDashboardEmpty() {
 function renderDashboard() {
   const student = data.students[selectedStudentId];
   if (!student) { renderDashboardEmpty(); return; }
-  const name = localNames[selectedStudentId] || 'Unnamed student';
+  const name = student.name || 'Unnamed student';
   const totalSeconds = student.sessionLogs.reduce((sum, l) => sum + l.durationSeconds, 0);
   const totalCards = student.sessionLogs.reduce((sum, l) => sum + l.cardsStudied, 0);
 
@@ -223,6 +210,7 @@ function renderDashboard() {
     <div class="row gap-sm mt-lg">
       <button class="btn ${teacherActiveTab === 'sessions' ? 'btn-primary' : 'btn-secondary'} btn-sm" id="tab-sessions-btn">Session log</button>
       <button class="btn ${teacherActiveTab === 'status' ? 'btn-primary' : 'btn-secondary'} btn-sm" id="tab-status-btn">Flashcard status</button>
+      <button class="btn ${teacherActiveTab === 'decks' ? 'btn-primary' : 'btn-secondary'} btn-sm" id="tab-decks-btn">Manage decks</button>
     </div>
     <div id="tab-content" class="mt-md"></div>
   `;
@@ -233,8 +221,6 @@ function renderDashboard() {
   document.getElementById('delete-student-btn').addEventListener('click', async () => {
     if (!confirm(`Permanently delete all flashcard data for "${name}"? This can't be undone.`)) return;
     delete data.students[selectedStudentId];
-    delete localNames[selectedStudentId];
-    saveLocalNames();
     await persist();
     selectedStudentId = null;
     renderStudentList();
@@ -242,9 +228,11 @@ function renderDashboard() {
   });
   document.getElementById('tab-sessions-btn').addEventListener('click', () => { teacherActiveTab = 'sessions'; renderDashboard(); });
   document.getElementById('tab-status-btn').addEventListener('click', () => { teacherActiveTab = 'status'; renderDashboard(); });
+  document.getElementById('tab-decks-btn').addEventListener('click', () => { teacherActiveTab = 'decks'; renderDashboard(); });
 
   if (teacherActiveTab === 'sessions') renderSessionLogTab(student);
-  else renderStatusTab(student);
+  else if (teacherActiveTab === 'status') renderStatusTab(student);
+  else if (teacherActiveTab === 'decks') renderDecksTab(student);
 }
 
 function renderSessionLogTab(student) {
@@ -302,4 +290,53 @@ function renderStatusTab(student) {
     `;
   });
   container.innerHTML = html;
+}
+
+function renderDecksTab(student) {
+  const container = document.getElementById('tab-content');
+  if (student.decks.length === 0) {
+    container.innerHTML = '<div class="empty-state"><h3>No decks yet</h3><p>Decks will appear here once the student creates them on their end.</p></div>';
+    return;
+  }
+  
+  let html = '<h3 class="mt-md">Publish decks</h3><p class="muted">Mark decks to make them available in your shared library — students can then import them.</p>';
+  html += '<div style="display:flex; flex-direction:column; gap:10px; margin-top:16px;">';
+  
+  student.decks.forEach((deck, i) => {
+    const isPublished = data.publishedDecks.some(d => d.id === deck.id);
+    const deckName = `${Utils.escapeHtml(deck.title)} (${deck.cards.length} cards)`;
+    html += `
+      <div style="display:flex; align-items:center; justify-content:space-between; padding:12px 14px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--surface);">
+        <span>${deckName}</span>
+        <button class="btn ${isPublished ? 'btn-danger' : 'btn-secondary'} btn-sm" data-deck-id="${deck.id}" data-is-published="${isPublished}">
+          ${isPublished ? '✕ Unpublish' : '✓ Publish'}
+        </button>
+      </div>
+    `;
+  });
+  
+  html += '</div>';
+  container.innerHTML = html;
+  
+  container.querySelectorAll('[data-deck-id]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const deckId = btn.dataset.deckId;
+      const isPublished = btn.dataset.isPublished === 'true';
+      const deck = student.decks.find(d => d.id === deckId);
+      
+      if (isPublished) {
+        data.publishedDecks = data.publishedDecks.filter(d => d.id !== deckId);
+      } else {
+        data.publishedDecks.push({
+          id: deck.id,
+          title: deck.title,
+          cards: deck.cards,
+          createdBy: selectedStudentId,
+          createdAt: Utils.nowIso()
+        });
+      }
+      await persist();
+      renderDecksTab(student);
+    });
+  });
 }
