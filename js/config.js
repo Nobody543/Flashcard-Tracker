@@ -19,10 +19,9 @@
    ========================================================================= */
 
 const CONFIG = {
-  JSONBIN_BIN_ID: '6a36c782f5f4af5e29150fe3',
+  JSONBIN_BIN_ID: '6a36c782f5f4af5e29150fe3 ',
   JSONBIN_API_KEY: '$2a$10$hW8GRX8MFA05OycfFwy0eOCylRevNEYeIqqHIBNQrHfIUrmU9i2kG',
 
-      
   // PIN required to open the teacher section.
   TEACHER_PIN: '2016',
 
