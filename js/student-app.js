@@ -245,6 +245,50 @@ function renderDecksView() {
   newTile.textContent = '+ New deck';
   newTile.addEventListener('click', () => openDeckEditor(null));
   grid.appendChild(newTile);
+
+  // Show published decks if any exist
+  if (data.publishedDecks && data.publishedDecks.length > 0) {
+    const pubSection = document.getElementById('published-decks-section');
+    if (pubSection) {
+      pubSection.innerHTML = '';
+      const h3 = document.createElement('h3');
+      h3.textContent = 'Published decks';
+      h3.className = 'mt-lg';
+      pubSection.appendChild(h3);
+      const p = document.createElement('p');
+      p.className = 'muted';
+      p.textContent = 'Import any of these shared decks to your own collection.';
+      pubSection.appendChild(p);
+      const pubGrid = document.createElement('div');
+      pubGrid.className = 'deck-grid';
+      data.publishedDecks.forEach(pubDeck => {
+        const alreadyImported = student.decks.some(d => d.id === pubDeck.id);
+        const tile = document.createElement('div');
+        tile.className = 'deck-tile';
+        tile.innerHTML = `
+          <h3>${Utils.escapeHtml(pubDeck.title)}</h3>
+          <div class="deck-meta"><span>${pubDeck.cards.length} cards</span></div>
+          <button class="btn btn-secondary btn-block mt-md" data-pub-id="${pubDeck.id}" ${alreadyImported ? 'disabled' : ''}>
+            ${alreadyImported ? '✓ Imported' : 'Import deck'}
+          </button>
+        `;
+        pubGrid.appendChild(tile);
+      });
+      pubSection.appendChild(pubGrid);
+      pubGrid.querySelectorAll('[data-pub-id]').forEach(btn => {
+        btn.addEventListener('click', async () => {
+          const pubId = btn.dataset.pubId;
+          const pubDeck = data.publishedDecks.find(d => d.id === pubId);
+          if (!pubDeck) return;
+          const imported = { id: pubDeck.id, title: pubDeck.title, createdAt: Utils.nowIso(), cards: JSON.parse(JSON.stringify(pubDeck.cards)) };
+          student.decks.push(imported);
+          await persist();
+          renderDecksView();
+          showToast(`Imported "${pubDeck.title}"`);
+        });
+      });
+    }
+  }
 }
 
 /* ---------------------------------------------------------------------- */
