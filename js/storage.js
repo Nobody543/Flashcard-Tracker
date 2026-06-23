@@ -18,7 +18,7 @@ const Storage = (() => {
   const LOCAL_KEY = 'flashcard_tracker_data_v1';
 
   function emptyData() {
-    return { students: {} };
+    return { students: {}, publishedDecks: [] };
   }
 
   function loadLocal() {
@@ -102,6 +102,7 @@ const Storage = (() => {
   function ensureStudent(data, studentId) {
     if (!data.students[studentId]) {
       data.students[studentId] = {
+        name: null, // will be set by teacher in the dashboard
         decks: [],
         deepLearnSettings: { dailyNewCardTarget: null, dateKey: null, introducedToday: 0 },
         sessionLogs: [],
