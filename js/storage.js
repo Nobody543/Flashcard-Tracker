@@ -1,8 +1,20 @@
 /* =========================================================================
    STORAGE
    Single source of truth is one JSON "bin" on JSONBin.io shaped like:
-   { "students": { "<studentId>": { decks, deepLearnSettings, sessionLogs,
-                                     activeSession } } }
+   {
+     "students": {
+       "<studentId>": {
+         name, decks, libraryLinks, deepLearnSettings, sessionLogs, activeSession
+       }
+     },
+     "libraryDecks": [ { id, title, createdAt, updatedAt, cards: [{id,term,definition}] } ]
+   }
+
+   Library decks are owned by the teacher and live once, centrally. A
+   student's progress on a library deck (stars, scores, deep-learn stage)
+   lives separately in that student's `libraryLinks`, keyed by card id —
+   so editing a library deck's content never wipes out anyone's progress,
+   and two students studying the same library deck never affect each other.
 
    Every load fetches the whole bin; every save writes the whole bin back.
    This is simple and fine for one tutor with a handful of students, but it
@@ -18,13 +30,25 @@ const Storage = (() => {
   const LOCAL_KEY = 'flashcard_tracker_data_v1';
 
   function emptyData() {
-    return { students: {}, publishedDecks: [] };
+    return { students: {}, libraryDecks: [] };
+  }
+
+  // Patches older saved data (from before libraryDecks/libraryLinks existed)
+  // so the rest of the app never has to worry about missing fields.
+  function normalize(data) {
+    if (!data.students) data.students = {};
+    if (!data.libraryDecks) data.libraryDecks = [];
+    Object.values(data.students).forEach(s => {
+      if (s.libraryLinks === undefined) s.libraryLinks = [];
+      if (s.name === undefined) s.name = null;
+    });
+    return data;
   }
 
   function loadLocal() {
     try {
       const raw = localStorage.getItem(LOCAL_KEY);
-      return raw ? JSON.parse(raw) : emptyData();
+      return normalize(raw ? JSON.parse(raw) : emptyData());
     } catch (e) {
       console.warn('Could not read local data, starting fresh.', e);
       return emptyData();
@@ -54,7 +78,7 @@ const Storage = (() => {
     });
     if (!res.ok) throw new Error('JSONBin fetch failed: ' + res.status);
     const json = await res.json();
-    return json.record || emptyData();
+    return normalize(json.record || emptyData());
   }
 
   async function saveRemote(data) {
@@ -102,14 +126,18 @@ const Storage = (() => {
   function ensureStudent(data, studentId) {
     if (!data.students[studentId]) {
       data.students[studentId] = {
-        name: null, // will be set by teacher in the dashboard
+        name: null,
         decks: [],
+        libraryLinks: [],
         deepLearnSettings: { dailyNewCardTarget: null, dateKey: null, introducedToday: 0 },
         sessionLogs: [],
         activeSession: null
       };
     }
-    return data.students[studentId];
+    const s = data.students[studentId];
+    if (s.libraryLinks === undefined) s.libraryLinks = [];
+    if (s.name === undefined) s.name = null;
+    return s;
   }
 
   return { loadAll, saveAll, isConfigured, ensureStudent, emptyData };
