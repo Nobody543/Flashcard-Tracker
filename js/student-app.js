@@ -1,14 +1,27 @@
 /* =========================================================================
    STUDENT APP
+
+   Two kinds of deck a student can study:
+   - "own"     decks the student created themselves (content + progress
+               live together on the same card object, as before)
+   - "library" decks the teacher created. Content lives once, centrally,
+               in data.libraryDecks. Each student's progress on a library
+               deck (stars, scores, deep-learn stage) lives separately in
+               student.libraryLinks, keyed by card id — so editing the
+               deck never wipes anyone's progress, and students never
+               affect each other's stats on a shared deck.
+
+   Everywhere in the study engine, a "ref" is { type: 'own'|'library', id }
+   identifying which deck a card belongs to.
    ========================================================================= */
 
 let studentId = null;
-let data = null;        // full payload: { students: { ... } }
-let student = null;     // data.students[studentId]
-let currentDeckId = null;
+let data = null;          // full payload: { students: {...}, libraryDecks: [...] }
+let student = null;       // data.students[studentId]
+let currentDeckRef = null;
 let isNewDeck = true;
 let editingDeck = null;
-let session = null;     // active study/deep-learn round, see startStudyRound()
+let session = null;       // active study/deep-learn round, see startStudyRound()
 let timerInterval = null;
 let toastTimeout = null;
 
@@ -64,6 +77,78 @@ function autoCloseStaleSession() {
 
 async function persist() {
   try { await Storage.saveAll(data); } catch (e) { console.warn('Save failed', e); }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Deck / progress abstraction (own decks + library decks)                */
+/* ---------------------------------------------------------------------- */
+
+function getOwnDeck(id) { return student.decks.find(d => d.id === id) || null; }
+function getLibraryDeck(id) { return (data.libraryDecks || []).find(d => d.id === id) || null; }
+
+function getLibraryLink(libraryDeckId, createIfMissing) {
+  let link = student.libraryLinks.find(l => l.libraryDeckId === libraryDeckId);
+  if (!link && createIfMissing) {
+    link = { libraryDeckId, addedAt: Utils.nowIso(), progress: {} };
+    student.libraryLinks.push(link);
+  }
+  return link || null;
+}
+
+// Live, mutable progress object for a card under a given ref. For "own"
+// decks this IS the card object itself. For "library" decks it's an entry
+// in the student's own libraryLinks (auto-created on first touch).
+function getProgress(ref, cardId) {
+  if (ref.type === 'own') {
+    const deck = getOwnDeck(ref.id);
+    return deck ? deck.cards.find(c => c.id === cardId) || null : null;
+  }
+  const link = getLibraryLink(ref.id, true);
+  if (!link.progress[cardId]) link.progress[cardId] = Utils.defaultProgress();
+  return link.progress[cardId];
+}
+
+// Read-only { term, definition } for a card under a given ref.
+function getContent(ref, cardId) {
+  const deck = ref.type === 'own' ? getOwnDeck(ref.id) : getLibraryDeck(ref.id);
+  const card = deck && deck.cards.find(c => c.id === cardId);
+  return card ? { term: card.term, definition: card.definition } : null;
+}
+
+// Merged view for rendering/studying: content + this student's progress + ref.
+function mergedCard(ref, cardId) {
+  const content = getContent(ref, cardId);
+  if (!content) return null;
+  const progress = getProgress(ref, cardId);
+  if (!progress) return null;
+  return { id: cardId, term: content.term, definition: content.definition, ...progress, ref };
+}
+
+// { id, title, isLibrary, ref, cardIds }
+function getDeckView(ref) {
+  const deck = ref.type === 'own' ? getOwnDeck(ref.id) : getLibraryDeck(ref.id);
+  if (!deck) return null;
+  return { id: deck.id, title: deck.title, isLibrary: ref.type === 'library', ref, cardIds: deck.cards.map(c => c.id) };
+}
+
+function getDeckCards(ref) {
+  const view = getDeckView(ref);
+  if (!view) return [];
+  return view.cardIds.map(id => mergedCard(ref, id)).filter(Boolean);
+}
+
+// Every deck the student can currently study: their own decks + every
+// library deck they've added.
+function allStudyRefs() {
+  const refs = student.decks.map(d => ({ type: 'own', id: d.id }));
+  (student.libraryLinks || []).forEach(link => {
+    if (getLibraryDeck(link.libraryDeckId)) refs.push({ type: 'library', id: link.libraryDeckId });
+  });
+  return refs;
+}
+
+function allStudyableCards() {
+  return allStudyRefs().flatMap(ref => getDeckCards(ref));
 }
 
 /* ---------------------------------------------------------------------- */
@@ -196,16 +281,18 @@ function stopTimerTick() {
 /* Decks view                                                              */
 /* ---------------------------------------------------------------------- */
 
-function deckStats(deck) {
-  const total = deck.cards.length || 1;
+function deckStats(ref) {
+  const cards = getDeckCards(ref);
+  const total = cards.length || 1;
   let green = 0, orange = 0, red = 0, neu = 0, starred = 0;
-  deck.cards.forEach(c => {
+  cards.forEach(c => {
     const s = Utils.cardStatus(c);
     if (s === 'green') green++; else if (s === 'orange') orange++; else if (s === 'red') red++; else neu++;
     if (c.starred) starred++;
   });
   return {
     starred,
+    count: cards.length,
     pctGreen: green / total * 100,
     pctOrange: orange / total * 100,
     pctRed: red / total * 100,
@@ -213,9 +300,22 @@ function deckStats(deck) {
   };
 }
 
+function buildDeckTileInner(title, stats, badgeHtml) {
+  return `
+    ${badgeHtml || ''}
+    <h3>${Utils.escapeHtml(title)}</h3>
+    <div class="deck-meta"><span>${stats.count} cards</span><span>★ ${stats.starred}</span></div>
+    <div class="mastery-bar">
+      <span style="width:${stats.pctGreen}%; background:var(--green);"></span>
+      <span style="width:${stats.pctOrange}%; background:var(--orange);"></span>
+      <span style="width:${stats.pctRed}%; background:var(--red);"></span>
+      <span style="width:${stats.pctNew}%; background:var(--grey-tint);"></span>
+    </div>`;
+}
+
 function renderDecksView() {
   session = null;
-  currentDeckId = null;
+  currentDeckRef = null;
   showView('view-decks');
   setTopbarTitle('Your decks');
 
@@ -224,19 +324,11 @@ function renderDecksView() {
   const grid = document.getElementById('deck-grid');
   grid.innerHTML = '';
   student.decks.forEach(deck => {
-    const stats = deckStats(deck);
+    const ref = { type: 'own', id: deck.id };
     const tile = document.createElement('div');
     tile.className = 'deck-tile';
-    tile.innerHTML = `
-      <h3>${Utils.escapeHtml(deck.title)}</h3>
-      <div class="deck-meta"><span>${deck.cards.length} cards</span><span>★ ${stats.starred}</span></div>
-      <div class="mastery-bar">
-        <span style="width:${stats.pctGreen}%; background:var(--green);"></span>
-        <span style="width:${stats.pctOrange}%; background:var(--orange);"></span>
-        <span style="width:${stats.pctRed}%; background:var(--red);"></span>
-        <span style="width:${stats.pctNew}%; background:var(--grey-tint);"></span>
-      </div>`;
-    tile.addEventListener('click', () => openDeckDetail(deck.id));
+    tile.innerHTML = buildDeckTileInner(deck.title, deckStats(ref));
+    tile.addEventListener('click', () => openDeckDetail(ref));
     grid.appendChild(tile);
   });
 
@@ -246,53 +338,55 @@ function renderDecksView() {
   newTile.addEventListener('click', () => openDeckEditor(null));
   grid.appendChild(newTile);
 
-  // Show published decks if any exist
-  if (data.publishedDecks && data.publishedDecks.length > 0) {
-    const pubSection = document.getElementById('published-decks-section');
-    if (pubSection) {
-      pubSection.innerHTML = '';
-      const h3 = document.createElement('h3');
-      h3.textContent = 'Published decks';
-      h3.className = 'mt-lg';
-      pubSection.appendChild(h3);
-      const p = document.createElement('p');
-      p.className = 'muted';
-      p.textContent = 'Import any of these shared decks to your own collection.';
-      pubSection.appendChild(p);
-      const pubGrid = document.createElement('div');
-      pubGrid.className = 'deck-grid';
-      data.publishedDecks.forEach(pubDeck => {
-        const alreadyImported = student.decks.some(d => d.id === pubDeck.id);
-        const tile = document.createElement('div');
-        tile.className = 'deck-tile';
-        tile.innerHTML = `
-          <h3>${Utils.escapeHtml(pubDeck.title)}</h3>
-          <div class="deck-meta"><span>${pubDeck.cards.length} cards</span></div>
-          <button class="btn btn-secondary btn-block mt-md" data-pub-id="${pubDeck.id}" ${alreadyImported ? 'disabled' : ''}>
-            ${alreadyImported ? '✓ Imported' : 'Import deck'}
-          </button>
-        `;
-        pubGrid.appendChild(tile);
-      });
-      pubSection.appendChild(pubGrid);
-      pubGrid.querySelectorAll('[data-pub-id]').forEach(btn => {
-        btn.addEventListener('click', async () => {
-          const pubId = btn.dataset.pubId;
-          const pubDeck = data.publishedDecks.find(d => d.id === pubId);
-          if (!pubDeck) return;
-          const imported = { id: pubDeck.id, title: pubDeck.title, createdAt: Utils.nowIso(), cards: JSON.parse(JSON.stringify(pubDeck.cards)) };
-          student.decks.push(imported);
-          await persist();
-          renderDecksView();
-          showToast(`Imported "${pubDeck.title}"`);
-        });
-      });
+  renderLibrarySection();
+}
+
+function renderLibrarySection() {
+  const section = document.getElementById('library-decks-section');
+  if (!section) return;
+  const libraryDecks = data.libraryDecks || [];
+  if (libraryDecks.length === 0) { section.innerHTML = ''; return; }
+
+  section.innerHTML = `
+    <h3 class="mt-lg">📚 Library decks</h3>
+    <p class="muted">Decks your tutor has set up for you. Add one to start studying it — if your tutor updates it later, you'll see the changes automatically.</p>
+    <div class="deck-grid" id="library-deck-grid"></div>
+  `;
+  const grid = document.getElementById('library-deck-grid');
+
+  libraryDecks.forEach(deck => {
+    const ref = { type: 'library', id: deck.id };
+    const linked = Boolean(getLibraryLink(deck.id, false));
+    const tile = document.createElement('div');
+    tile.className = 'deck-tile';
+    if (linked) {
+      tile.innerHTML = buildDeckTileInner(deck.title, deckStats(ref), '<span class="badge badge-purple" style="margin-bottom:8px;">Library</span>');
+      tile.addEventListener('click', () => openDeckDetail(ref));
+    } else {
+      tile.innerHTML = `
+        <span class="badge badge-purple" style="margin-bottom:8px;">Library</span>
+        <h3>${Utils.escapeHtml(deck.title)}</h3>
+        <div class="deck-meta"><span>${deck.cards.length} cards</span></div>
+        <button class="btn btn-secondary btn-block mt-md" data-add-lib="${deck.id}">+ Add to my decks</button>
+      `;
     }
-  }
+    grid.appendChild(tile);
+  });
+
+  grid.querySelectorAll('[data-add-lib]').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const id = btn.dataset.addLib;
+      getLibraryLink(id, true);
+      await persist();
+      openDeckDetail({ type: 'library', id });
+    });
+  });
 }
 
 /* ---------------------------------------------------------------------- */
-/* Deck editor (create / edit)                                            */
+/* Deck editor (create / edit) — own decks only, library decks are         */
+/* managed by the teacher.                                                */
 /* ---------------------------------------------------------------------- */
 
 function openDeckEditor(deckId) {
@@ -357,7 +451,6 @@ function renderDeckEditor() {
 function renderEditorCardList() {
   const list = document.getElementById('editor-card-list');
   document.getElementById('editor-card-count-label').textContent = `Cards (${editingDeck.cards.length})`;
-
 
   if (editingDeck.cards.length === 0) {
     list.innerHTML = '<p class="muted">No cards yet — paste some text above or add manually.</p>';
@@ -430,28 +523,40 @@ async function handleEditorDelete() {
 /* Deck detail (browse / star / launch study)                             */
 /* ---------------------------------------------------------------------- */
 
-function openDeckDetail(deckId) {
-  currentDeckId = deckId;
+function openDeckDetail(ref) {
+  currentDeckRef = ref;
+  const view = getDeckView(ref);
+  if (!view) { renderDecksView(); return; }
   showView('view-deck-detail');
-  const deck = student.decks.find(d => d.id === deckId);
-  setTopbarTitle(deck.title);
+  setTopbarTitle(view.title);
   renderDeckDetail();
 }
 
 function renderDeckDetail() {
-  const deck = student.decks.find(d => d.id === currentDeckId);
-  const view = document.getElementById('view-deck-detail');
-  const needsPractice = deck.cards.filter(c => Utils.cardStatus(c) === 'red').length;
-  const starredCount = deck.cards.filter(c => c.starred).length;
+  const ref = currentDeckRef;
+  const view = getDeckView(ref);
+  if (!view) { renderDecksView(); return; }
+  const cards = getDeckCards(ref);
+  const needsPractice = cards.filter(c => Utils.cardStatus(c) === 'red').length;
+  const starredCount = cards.filter(c => c.starred).length;
 
-  view.innerHTML = `
+  const detailView = document.getElementById('view-deck-detail');
+  detailView.innerHTML = `
     <button class="btn btn-ghost btn-sm" id="detail-back-btn">← All decks</button>
-    <div class="row-between mt-md">
-      <h1>${Utils.escapeHtml(deck.title)}</h1>
-      <button class="btn btn-secondary btn-sm" id="detail-edit-btn">Edit deck</button>
+    <div class="row-between mt-md" style="flex-wrap:wrap; gap:10px;">
+      <div>
+        <h1 style="display:inline;">${Utils.escapeHtml(view.title)}</h1>
+        ${view.isLibrary ? ' <span class="badge badge-purple">Library</span>' : ''}
+        ${view.isLibrary ? '<p class="muted" style="margin:6px 0 0;">Managed by your tutor — your stars and scores are your own.</p>' : ''}
+      </div>
+      <div class="row gap-sm">
+        ${view.isLibrary
+          ? '<button class="btn btn-ghost btn-sm" id="detail-remove-lib-btn">Remove from my decks</button>'
+          : '<button class="btn btn-secondary btn-sm" id="detail-edit-btn">Edit deck</button>'}
+      </div>
     </div>
     <div class="row gap-sm mt-sm" style="flex-wrap:wrap;">
-      <button class="btn btn-primary" id="study-all-btn" ${deck.cards.length === 0 ? 'disabled' : ''}>Study all (${deck.cards.length})</button>
+      <button class="btn btn-primary" id="study-all-btn" ${cards.length === 0 ? 'disabled' : ''}>Study all (${cards.length})</button>
       <button class="btn btn-secondary" id="study-starred-btn" ${starredCount === 0 ? 'disabled' : ''}>Study starred (${starredCount})</button>
       <button class="btn btn-secondary" id="study-needs-btn" ${needsPractice === 0 ? 'disabled' : ''}>Needs practice (${needsPractice})</button>
     </div>
@@ -460,11 +565,11 @@ function renderDeckDetail() {
   `;
 
   const list = document.getElementById('detail-card-list');
-  if (deck.cards.length === 0) {
-    list.innerHTML = '<div class="empty-state"><h3>No cards in this deck yet</h3><p>Edit the deck to paste in some terms and definitions.</p></div>';
+  if (cards.length === 0) {
+    list.innerHTML = `<div class="empty-state"><h3>No cards in this deck yet</h3><p>${view.isLibrary ? 'Ask your tutor to add some cards to it.' : 'Edit the deck to paste in some terms and definitions.'}</p></div>`;
   } else {
     list.innerHTML = '';
-    deck.cards.forEach(card => {
+    cards.forEach(card => {
       const status = Utils.cardStatus(card);
       const row = document.createElement('div');
       row.className = 'card-row';
@@ -478,8 +583,8 @@ function renderDeckDetail() {
     });
     list.querySelectorAll('.star-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
-        const card = deck.cards.find(c => c.id === btn.dataset.card);
-        card.starred = !card.starred;
+        const progress = getProgress(ref, btn.dataset.card);
+        progress.starred = !progress.starred;
         await persist();
         renderDeckDetail();
       });
@@ -487,29 +592,32 @@ function renderDeckDetail() {
   }
 
   document.getElementById('detail-back-btn').addEventListener('click', renderDecksView);
-  document.getElementById('detail-edit-btn').addEventListener('click', () => openDeckEditor(deck.id));
+  const editBtn = document.getElementById('detail-edit-btn');
+  if (editBtn) editBtn.addEventListener('click', () => openDeckEditor(ref.id));
+  const removeBtn = document.getElementById('detail-remove-lib-btn');
+  if (removeBtn) removeBtn.addEventListener('click', async () => {
+    if (!confirm("Remove this deck from your list? Your progress on it will be lost, but it stays available in the library if you want to add it again.")) return;
+    student.libraryLinks = student.libraryLinks.filter(l => l.libraryDeckId !== ref.id);
+    await persist();
+    renderDecksView();
+  });
+
   document.getElementById('study-all-btn').addEventListener('click', () =>
-    startStudyRound(deck.cards.map(c => c.id), 'all', { type: 'study', returnTo: 'deckDetail' }));
+    startStudyRound(cards.map(c => ({ ref: c.ref, cardId: c.id })), 'all', { type: 'study', returnTo: 'deckDetail' }));
   document.getElementById('study-starred-btn').addEventListener('click', () =>
-    startStudyRound(deck.cards.filter(c => c.starred).map(c => c.id), 'starred', { type: 'study', returnTo: 'deckDetail' }));
+    startStudyRound(cards.filter(c => c.starred).map(c => ({ ref: c.ref, cardId: c.id })), 'starred', { type: 'study', returnTo: 'deckDetail' }));
   document.getElementById('study-needs-btn').addEventListener('click', () =>
-    startStudyRound(deck.cards.filter(c => Utils.cardStatus(c) === 'red').map(c => c.id), 'needs', { type: 'study', returnTo: 'deckDetail' }));
+    startStudyRound(cards.filter(c => Utils.cardStatus(c) === 'red').map(c => ({ ref: c.ref, cardId: c.id })), 'needs', { type: 'study', returnTo: 'deckDetail' }));
 }
 
 /* ---------------------------------------------------------------------- */
 /* Study engine (shared by Study mode + all Deep Learn flows)             */
+/* `session.items` is an array of { ref, cardId } so a single round can   */
+/* mix cards from several decks (own and/or library) at once.            */
 /* ---------------------------------------------------------------------- */
 
-function findCardById(cardId) {
-  for (const deck of student.decks) {
-    const card = deck.cards.find(c => c.id === cardId);
-    if (card) return { card, deck };
-  }
-  return null;
-}
-
-function startStudyRound(cardIds, subtype, opts) {
-  if (!cardIds || cardIds.length === 0) { showToast('No cards in this group yet.'); return; }
+function startStudyRound(items, subtype, opts) {
+  if (!items || items.length === 0) { showToast('No cards in this group yet.'); return; }
   ensureSessionActive();
   persist();
   session = {
@@ -517,9 +625,9 @@ function startStudyRound(cardIds, subtype, opts) {
     subtype,
     returnTo: opts.returnTo,
     deepLearnAction: opts.deepLearnAction || null,
-    cardIds: Utils.shuffle(cardIds),
+    items: Utils.shuffle(items),
     index: 0,
-    wrongIds: [],
+    wrongItems: [],
     flipped: false
   };
   showView('view-study');
@@ -528,20 +636,19 @@ function startStudyRound(cardIds, subtype, opts) {
 }
 
 function renderStudyCard() {
-  if (session.index >= session.cardIds.length) { finishStudyRound(); return; }
+  if (session.index >= session.items.length) { finishStudyRound(); return; }
 
-  const cardId = session.cardIds[session.index];
-  const found = findCardById(cardId);
-  if (!found) { session.index++; renderStudyCard(); return; }
-  const { card } = found;
+  const { ref, cardId } = session.items[session.index];
+  const card = mergedCard(ref, cardId);
+  if (!card) { session.index++; renderStudyCard(); return; }
   const isDeep = session.type.startsWith('deepLearn');
   const view = document.getElementById('view-study');
 
   view.innerHTML = `
     <div class="study-wrap">
       <div class="study-progress">
-        <div class="progress-track"><div class="progress-fill" style="width:${(session.index / session.cardIds.length * 100)}%; ${isDeep ? 'background:var(--purple);' : ''}"></div></div>
-        <div class="progress-label"><span>Card ${session.index + 1} of ${session.cardIds.length}</span><span>${session.wrongIds.length} to review again</span></div>
+        <div class="progress-track"><div class="progress-fill" style="width:${(session.index / session.items.length * 100)}%; ${isDeep ? 'background:var(--purple);' : ''}"></div></div>
+        <div class="progress-label"><span>Card ${session.index + 1} of ${session.items.length}</span><span>${session.wrongItems.length} to review again</span></div>
       </div>
       <div class="flip-hint">Tap the card to flip it</div>
       <div class="flashcard-scene">
@@ -574,7 +681,8 @@ function renderStudyCard() {
   document.getElementById('mark-wrong-btn').addEventListener('click', () => answerCard(false));
   document.getElementById('mark-right-btn').addEventListener('click', () => answerCard(true));
   document.getElementById('study-star-btn').addEventListener('click', async () => {
-    card.starred = !card.starred;
+    const progress = getProgress(ref, cardId);
+    progress.starred = !progress.starred;
     await persist();
     renderStudyCard();
   });
@@ -584,23 +692,23 @@ function renderStudyCard() {
 }
 
 async function answerCard(correct) {
-  const cardId = session.cardIds[session.index];
-  const { card } = findCardById(cardId);
+  const { ref, cardId } = session.items[session.index];
+  const progress = getProgress(ref, cardId);
 
-  card.timesSeen++;
-  card.lastSeenAt = Utils.nowIso();
+  progress.timesSeen++;
+  progress.lastSeenAt = Utils.nowIso();
   if (correct) {
-    card.timesCorrect++;
-    card.correctStreak++;
-    card.lastResult = 'correct';
+    progress.timesCorrect++;
+    progress.correctStreak++;
+    progress.lastResult = 'correct';
   } else {
-    card.correctStreak = 0;
-    card.lastResult = 'incorrect';
-    session.wrongIds.push(cardId);
+    progress.correctStreak = 0;
+    progress.lastResult = 'incorrect';
+    session.wrongItems.push({ ref, cardId });
   }
 
   if (session.type.startsWith('deepLearn') && session.deepLearnAction !== 'recap') {
-    applyDeepLearnResult(card, correct);
+    applyDeepLearnResult(progress, correct);
   }
 
   if (student.activeSession) student.activeSession.cardsStudied++;
@@ -611,8 +719,8 @@ async function answerCard(correct) {
   renderStudyCard();
 }
 
-function applyDeepLearnResult(card, correct) {
-  const dl = card.deepLearn;
+function applyDeepLearnResult(progress, correct) {
+  const dl = progress.deepLearn;
   dl.lastReviewedAt = Utils.nowIso();
   if (correct) {
     const nextStage = dl.stage + 1;
@@ -631,8 +739,8 @@ function applyDeepLearnResult(card, correct) {
 }
 
 function finishStudyRound() {
-  const total = session.cardIds.length;
-  const wrong = session.wrongIds.length;
+  const total = session.items.length;
+  const wrong = session.wrongItems.length;
   const correct = total - wrong;
 
   showView('view-summary');
@@ -655,8 +763,8 @@ function finishStudyRound() {
 
   if (wrong > 0) {
     document.getElementById('review-wrong-btn').addEventListener('click', () => {
-      const { type, deepLearnAction, returnTo, wrongIds } = session;
-      session = { type, subtype: 'retry', returnTo, deepLearnAction, cardIds: Utils.shuffle(wrongIds), index: 0, wrongIds: [], flipped: false };
+      const { type, deepLearnAction, returnTo, wrongItems } = session;
+      session = { type, subtype: 'retry', returnTo, deepLearnAction, items: Utils.shuffle(wrongItems), index: 0, wrongItems: [], flipped: false };
       showView('view-study');
       renderStudyCard();
     });
@@ -670,7 +778,7 @@ function finishStudyRound() {
 }
 
 /* ---------------------------------------------------------------------- */
-/* Deep Learn home                                                        */
+/* Deep Learn home — pools cards from ALL own + added library decks       */
 /* ---------------------------------------------------------------------- */
 
 function ensureDeepLearnDay() {
@@ -687,7 +795,7 @@ function renderDeepLearnHome() {
   showView('view-deep-learn');
   setTopbarTitle('Deep Learn');
 
-  const allCards = student.decks.flatMap(d => d.cards);
+  const allCards = allStudyableCards();
   const notStarted = allCards.filter(c => !c.deepLearn.inDeepLearn && !c.deepLearn.learned);
   const dueNow = allCards.filter(c => c.deepLearn.inDeepLearn && !c.deepLearn.learned && c.deepLearn.nextReviewAt && new Date(c.deepLearn.nextReviewAt) <= new Date());
   const learned = allCards.filter(c => c.deepLearn.learned);
@@ -700,7 +808,7 @@ function renderDeepLearnHome() {
   const view = document.getElementById('view-deep-learn');
   view.innerHTML = `
     <h1>Deep Learn</h1>
-    <p class="muted">Learn a handful of new cards each day, then come back throughout the day to lock them in.</p>
+    <p class="muted">Learn a handful of new cards each day, then come back throughout the day to lock them in. This pulls from your own decks and any library decks you've added.</p>
 
     <div class="dl-stat-grid">
       <div class="dl-stat-card"><div class="num">${introduced}${target ? '/' + target : ''}</div><div class="lbl">New today</div></div>
@@ -738,26 +846,26 @@ function renderDeepLearnHome() {
 
   document.getElementById('learn-new-btn').addEventListener('click', () => {
     if (!target) { promptDailyTarget(true); return; }
-    const pool = Utils.shuffle(notStarted).slice(0, availableNew).map(c => c.id);
-    pool.forEach(id => {
-      const { card } = findCardById(id);
-      card.deepLearn.inDeepLearn = true;
-      card.deepLearn.addedAt = Utils.nowIso();
-      card.deepLearn.stage = 0;
-      card.deepLearn.nextReviewAt = Utils.nowIso();
+    const pool = Utils.shuffle(notStarted).slice(0, availableNew);
+    pool.forEach(c => {
+      const progress = getProgress(c.ref, c.id);
+      progress.deepLearn.inDeepLearn = true;
+      progress.deepLearn.addedAt = Utils.nowIso();
+      progress.deepLearn.stage = 0;
+      progress.deepLearn.nextReviewAt = Utils.nowIso();
     });
     student.deepLearnSettings.introducedToday = introduced + pool.length;
     persist();
-    startStudyRound(pool, 'new', { type: 'deepLearnNew', returnTo: 'deepLearn' });
+    startStudyRound(pool.map(c => ({ ref: c.ref, cardId: c.id })), 'new', { type: 'deepLearnNew', returnTo: 'deepLearn' });
   });
 
   const incBtn = document.getElementById('increase-target-btn');
   if (incBtn) incBtn.addEventListener('click', () => promptDailyTarget(false));
 
   document.getElementById('review-due-btn').addEventListener('click', () =>
-    startStudyRound(dueNow.map(c => c.id), 'due', { type: 'deepLearnDue', returnTo: 'deepLearn' }));
+    startStudyRound(dueNow.map(c => ({ ref: c.ref, cardId: c.id })), 'due', { type: 'deepLearnDue', returnTo: 'deepLearn' }));
   document.getElementById('review-learned-btn').addEventListener('click', () =>
-    startStudyRound(learned.map(c => c.id), 'recap', { type: 'deepLearnReview', returnTo: 'deepLearn', deepLearnAction: 'recap' }));
+    startStudyRound(learned.map(c => ({ ref: c.ref, cardId: c.id })), 'recap', { type: 'deepLearnReview', returnTo: 'deepLearn', deepLearnAction: 'recap' }));
 }
 
 function promptDailyTarget(isFirstTime) {
