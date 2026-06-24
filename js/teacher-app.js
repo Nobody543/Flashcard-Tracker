@@ -1,13 +1,20 @@
 /* =========================================================================
    TEACHER APP
-   Student real names are stored ONLY in this browser's localStorage —
-   never written to the shared JSONBin data. The shared data only ever
-   contains anonymous student IDs.
+
+   Two things a teacher manages here:
+   - Students: per-student dashboard (session log + flashcard status)
+   - Library:  decks the teacher owns and every student can browse/add.
+               Editing a library deck updates it for every student
+               instantly; each student's stars/scores on it stay their own
+               (stored in that student's libraryLinks, not on the deck).
    ========================================================================= */
 
 let data = null;
 let selectedStudentId = null;
-let teacherActiveTab = 'sessions'; // 'sessions' | 'status' | 'decks'
+let viewMode = 'empty';          // 'empty' | 'student' | 'library'
+let teacherActiveTab = 'sessions'; // 'sessions' | 'status'
+let isNewLibDeck = true;
+let editingLibDeck = null;
 let toastTimeout = null;
 
 document.addEventListener('DOMContentLoaded', init);
@@ -47,10 +54,11 @@ async function showTeacherApp() {
   document.getElementById('app').style.display = 'flex';
   document.getElementById('add-student-btn').addEventListener('click', addStudent);
   document.getElementById('refresh-btn').addEventListener('click', refreshData);
+  document.getElementById('library-nav-btn').addEventListener('click', openLibrary);
   renderStudentList();
   renderDashboardEmpty();
   if (!Storage.isConfigured()) {
-    showToast('Set up JSONBin in js/config.js to sync data across your own devices and your student\'s device.');
+    showToast("Set up JSONBin in js/config.js to sync data across your own devices and your student's device.");
   }
 }
 
@@ -58,7 +66,8 @@ async function refreshData() {
   const loaded = await Storage.loadAll();
   data = loaded.data;
   renderStudentList();
-  if (selectedStudentId && data.students[selectedStudentId]) renderDashboard();
+  if (viewMode === 'student' && selectedStudentId && data.students[selectedStudentId]) renderDashboard();
+  else if (viewMode === 'library') renderLibraryManager();
   showToast('Refreshed.');
 }
 
@@ -75,12 +84,14 @@ function setupModalDismiss() {
     if (e.target.id === 'modal-overlay') closeModal();
   });
 }
-function openModal(html) {
+function openModal(html, wide) {
+  document.getElementById('modal-content').classList.toggle('modal-wide', Boolean(wide));
   document.getElementById('modal-content').innerHTML = html;
   document.getElementById('modal-overlay').classList.remove('hidden');
 }
 function closeModal() {
   document.getElementById('modal-overlay').classList.add('hidden');
+  document.getElementById('modal-content').classList.remove('modal-wide');
 }
 function showToast(msg) {
   const t = document.getElementById('toast');
@@ -108,7 +119,7 @@ function renderStudentList() {
   ids.forEach(id => {
     const name = data.students[id].name;
     const btn = document.createElement('button');
-    btn.className = 'nav-item' + (id === selectedStudentId ? ' active' : '');
+    btn.className = 'nav-item' + (viewMode === 'student' && id === selectedStudentId ? ' active' : '');
     btn.textContent = name || 'Unnamed student';
     if (!name) btn.style.fontStyle = 'italic';
     btn.addEventListener('click', () => selectStudent(id));
@@ -161,21 +172,24 @@ function openNamePrompt(studentId, isNew) {
 }
 
 function selectStudent(id) {
+  viewMode = 'student';
   selectedStudentId = id;
   teacherActiveTab = 'sessions';
+  document.getElementById('library-nav-btn').classList.remove('active');
   renderStudentList();
   renderDashboard();
 }
 
 /* ---------------------------------------------------------------------- */
-/* Dashboard                                                              */
+/* Per-student dashboard                                                  */
 /* ---------------------------------------------------------------------- */
 
 function renderDashboardEmpty() {
+  viewMode = 'empty';
   document.getElementById('dashboard-area').innerHTML = `
     <div class="empty-state">
       <h3>Select a student</h3>
-      <p>Choose a student on the left, or add a new one to get started.</p>
+      <p>Choose a student on the left, add a new one, or manage your deck library above.</p>
     </div>`;
 }
 
@@ -185,6 +199,7 @@ function renderDashboard() {
   const name = student.name || 'Unnamed student';
   const totalSeconds = student.sessionLogs.reduce((sum, l) => sum + l.durationSeconds, 0);
   const totalCards = student.sessionLogs.reduce((sum, l) => sum + l.cardsStudied, 0);
+  const deckCount = student.decks.length + (student.libraryLinks ? student.libraryLinks.length : 0);
 
   const area = document.getElementById('dashboard-area');
   area.innerHTML = `
@@ -204,13 +219,12 @@ function renderDashboard() {
       <div class="dl-stat-card" style="background:var(--blue-tint);"><div class="num" style="color:var(--blue-dark);">${Utils.formatDuration(totalSeconds)}</div><div class="lbl" style="color:var(--blue-dark);">Total time</div></div>
       <div class="dl-stat-card" style="background:var(--blue-tint);"><div class="num" style="color:var(--blue-dark);">${student.sessionLogs.length}</div><div class="lbl" style="color:var(--blue-dark);">Sessions</div></div>
       <div class="dl-stat-card" style="background:var(--blue-tint);"><div class="num" style="color:var(--blue-dark);">${totalCards}</div><div class="lbl" style="color:var(--blue-dark);">Cards studied</div></div>
-      <div class="dl-stat-card" style="background:var(--blue-tint);"><div class="num" style="color:var(--blue-dark);">${student.decks.length}</div><div class="lbl" style="color:var(--blue-dark);">Decks</div></div>
+      <div class="dl-stat-card" style="background:var(--blue-tint);"><div class="num" style="color:var(--blue-dark);">${deckCount}</div><div class="lbl" style="color:var(--blue-dark);">Decks</div></div>
     </div>
 
     <div class="row gap-sm mt-lg">
       <button class="btn ${teacherActiveTab === 'sessions' ? 'btn-primary' : 'btn-secondary'} btn-sm" id="tab-sessions-btn">Session log</button>
       <button class="btn ${teacherActiveTab === 'status' ? 'btn-primary' : 'btn-secondary'} btn-sm" id="tab-status-btn">Flashcard status</button>
-      <button class="btn ${teacherActiveTab === 'decks' ? 'btn-primary' : 'btn-secondary'} btn-sm" id="tab-decks-btn">Manage decks</button>
     </div>
     <div id="tab-content" class="mt-md"></div>
   `;
@@ -228,11 +242,9 @@ function renderDashboard() {
   });
   document.getElementById('tab-sessions-btn').addEventListener('click', () => { teacherActiveTab = 'sessions'; renderDashboard(); });
   document.getElementById('tab-status-btn').addEventListener('click', () => { teacherActiveTab = 'status'; renderDashboard(); });
-  document.getElementById('tab-decks-btn').addEventListener('click', () => { teacherActiveTab = 'decks'; renderDashboard(); });
 
   if (teacherActiveTab === 'sessions') renderSessionLogTab(student);
-  else if (teacherActiveTab === 'status') renderStatusTab(student);
-  else if (teacherActiveTab === 'decks') renderDecksTab(student);
+  else renderStatusTab(student);
 }
 
 function renderSessionLogTab(student) {
@@ -258,16 +270,34 @@ function renderSessionLogTab(student) {
   `;
 }
 
+// Builds one merged { title, isLibrary, cards } section per deck the
+// student is using — own decks AND any library decks they've added —
+// so the status table shows everything in one place.
+function buildStatusSections(student) {
+  const ownSections = student.decks.map(d => ({ title: d.title, isLibrary: false, cards: d.cards }));
+  const libSections = (student.libraryLinks || []).map(link => {
+    const libDeck = (data.libraryDecks || []).find(d => d.id === link.libraryDeckId);
+    if (!libDeck) return null;
+    const cards = libDeck.cards.map(c => {
+      const progress = link.progress[c.id] || Utils.defaultProgress();
+      return { id: c.id, term: c.term, definition: c.definition, ...progress };
+    });
+    return { title: libDeck.title, isLibrary: true, cards };
+  }).filter(Boolean);
+  return [...ownSections, ...libSections];
+}
+
 function renderStatusTab(student) {
   const container = document.getElementById('tab-content');
-  if (student.decks.length === 0) {
-    container.innerHTML = '<div class="empty-state"><h3>No decks yet</h3><p>Nothing to show until they create a deck.</p></div>';
+  const sections = buildStatusSections(student);
+  if (sections.length === 0) {
+    container.innerHTML = '<div class="empty-state"><h3>No decks yet</h3><p>Nothing to show until they create or add a deck.</p></div>';
     return;
   }
   const labelMap = { green: 'Mastered', orange: 'Recently correct', red: 'Needs practice', new: 'Not studied yet' };
   let html = '';
-  student.decks.forEach((deck, di) => {
-    const rows = deck.cards.map((card, ci) => {
+  sections.forEach((section, di) => {
+    const rows = section.cards.map((card, ci) => {
       const status = Utils.cardStatus(card);
       return `
         <tr>
@@ -282,7 +312,11 @@ function renderStatusTab(student) {
         </tr>`;
     }).join('');
     html += `
-      <div class="deck-section-title"><h3>Deck ${di + 1} — ${Utils.escapeHtml(deck.title)}</h3><span class="muted">(${deck.cards.length} cards)</span></div>
+      <div class="deck-section-title">
+        <h3>Deck ${di + 1} — ${Utils.escapeHtml(section.title)}</h3>
+        ${section.isLibrary ? '<span class="badge badge-purple">Library</span>' : ''}
+        <span class="muted">(${section.cards.length} cards)</span>
+      </div>
       <table>
         <thead><tr><th>#</th><th>Term</th><th>Definition</th><th>Status</th><th>Seen</th><th>Correct</th><th>Last seen</th><th>★</th></tr></thead>
         <tbody>${rows || '<tr><td colspan="8" class="muted">No cards in this deck.</td></tr>'}</tbody>
@@ -292,51 +326,191 @@ function renderStatusTab(student) {
   container.innerHTML = html;
 }
 
-function renderDecksTab(student) {
-  const container = document.getElementById('tab-content');
-  if (student.decks.length === 0) {
-    container.innerHTML = '<div class="empty-state"><h3>No decks yet</h3><p>Decks will appear here once the student creates them on their end.</p></div>';
+/* ---------------------------------------------------------------------- */
+/* Library — decks the teacher owns, shared with every student            */
+/* ---------------------------------------------------------------------- */
+
+function openLibrary() {
+  viewMode = 'library';
+  selectedStudentId = null;
+  renderStudentList();
+  renderLibraryManager();
+}
+
+function renderLibraryManager() {
+  document.getElementById('library-nav-btn').classList.add('active');
+
+  const area = document.getElementById('dashboard-area');
+  area.innerHTML = `
+    <div class="row-between" style="flex-wrap:wrap; gap:10px;">
+      <h1>Deck library</h1>
+      <button class="btn btn-primary btn-sm" id="new-lib-deck-btn">+ New deck</button>
+    </div>
+    <p class="muted">Decks here are visible to every student. Editing one updates it for everyone studying it instantly — their own stars and scores stay theirs.</p>
+    <div class="deck-grid" id="library-deck-grid" style="margin-top:18px;"></div>
+  `;
+
+  const grid = document.getElementById('library-deck-grid');
+  const decks = data.libraryDecks || [];
+
+  decks.forEach(deck => {
+    const usedByCount = Object.values(data.students).filter(s =>
+      (s.libraryLinks || []).some(l => l.libraryDeckId === deck.id)
+    ).length;
+    const tile = document.createElement('div');
+    tile.className = 'deck-tile';
+    tile.innerHTML = `
+      <h3>${Utils.escapeHtml(deck.title)}</h3>
+      <div class="deck-meta"><span>${deck.cards.length} cards</span><span>${usedByCount} student${usedByCount === 1 ? '' : 's'} using it</span></div>
+    `;
+    tile.addEventListener('click', () => openLibraryDeckEditor(deck.id));
+    grid.appendChild(tile);
+  });
+
+  const newTile = document.createElement('button');
+  newTile.className = 'deck-tile deck-tile-new';
+  newTile.textContent = '+ New deck';
+  newTile.addEventListener('click', () => openLibraryDeckEditor(null));
+  grid.appendChild(newTile);
+
+  if (decks.length === 0) {
+    const hint = document.createElement('p');
+    hint.className = 'muted';
+    hint.textContent = 'No library decks yet — create your first one above.';
+    area.insertBefore(hint, document.getElementById('library-deck-grid'));
+  }
+
+  document.getElementById('new-lib-deck-btn').addEventListener('click', () => openLibraryDeckEditor(null));
+}
+
+function openLibraryDeckEditor(deckId) {
+  isNewLibDeck = !deckId;
+  if (deckId) {
+    const original = data.libraryDecks.find(d => d.id === deckId);
+    editingLibDeck = JSON.parse(JSON.stringify(original));
+  } else {
+    editingLibDeck = { id: Utils.genId('libdeck'), title: '', createdAt: Utils.nowIso(), cards: [] };
+  }
+  renderLibraryDeckEditorModal();
+}
+
+function renderLibraryDeckEditorModal() {
+  openModal(`
+    <h2>${isNewLibDeck ? 'New library deck' : 'Edit library deck'}</h2>
+    <div class="field">
+      <label>Deck title</label>
+      <input type="text" id="lib-editor-title" value="${Utils.escapeHtml(editingLibDeck.title)}" placeholder="e.g. Mechanics — Forces" />
+    </div>
+    <div class="field">
+      <label>Paste terms &amp; definitions — one per line: Term, then a Tab, then Definition</label>
+      <textarea id="lib-editor-paste" placeholder="Newton's First Law&#9;An object stays at rest or moves uniformly unless acted on by a resultant force"></textarea>
+      <div class="row mt-sm">
+        <button class="btn btn-secondary btn-sm" id="lib-editor-import-btn">Add pasted cards</button>
+        <button class="btn btn-ghost btn-sm" id="lib-editor-add-blank-btn">+ Add card manually</button>
+      </div>
+    </div>
+    <div class="field">
+      <label id="lib-editor-card-count-label">Cards (${editingLibDeck.cards.length})</label>
+      <div id="lib-editor-card-list"></div>
+    </div>
+    <div class="modal-actions" style="justify-content:flex-start;">
+      <button class="btn btn-primary" id="lib-editor-save-btn">Save deck</button>
+      <button class="btn btn-ghost" id="lib-editor-cancel-btn">Cancel</button>
+      ${!isNewLibDeck ? '<button class="btn btn-danger" id="lib-editor-delete-btn">Delete deck</button>' : ''}
+    </div>
+  `, true);
+
+  renderLibEditorCardList();
+
+  document.getElementById('lib-editor-cancel-btn').addEventListener('click', closeLibraryEditor);
+  document.getElementById('lib-editor-import-btn').addEventListener('click', handleLibEditorImport);
+  document.getElementById('lib-editor-add-blank-btn').addEventListener('click', () => {
+    editingLibDeck.cards.push({ id: Utils.genId('card'), term: '', definition: '' });
+    renderLibEditorCardList();
+  });
+  document.getElementById('lib-editor-save-btn').addEventListener('click', handleLibEditorSave);
+  const delBtn = document.getElementById('lib-editor-delete-btn');
+  if (delBtn) delBtn.addEventListener('click', handleLibEditorDelete);
+}
+
+function closeLibraryEditor() {
+  closeModal();
+  renderLibraryManager();
+}
+
+function renderLibEditorCardList() {
+  const list = document.getElementById('lib-editor-card-list');
+  document.getElementById('lib-editor-card-count-label').textContent = `Cards (${editingLibDeck.cards.length})`;
+
+  if (editingLibDeck.cards.length === 0) {
+    list.innerHTML = '<p class="muted">No cards yet — paste some text above or add manually.</p>';
     return;
   }
-  
-  let html = '<h3 class="mt-md">Publish decks</h3><p class="muted">Mark decks to make them available in your shared library — students can then import them.</p>';
-  html += '<div style="display:flex; flex-direction:column; gap:10px; margin-top:16px;">';
-  
-  student.decks.forEach((deck, i) => {
-    const isPublished = data.publishedDecks.some(d => d.id === deck.id);
-    const deckName = `${Utils.escapeHtml(deck.title)} (${deck.cards.length} cards)`;
-    html += `
-      <div style="display:flex; align-items:center; justify-content:space-between; padding:12px 14px; border:1px solid var(--border); border-radius:var(--radius-sm); background:var(--surface);">
-        <span>${deckName}</span>
-        <button class="btn ${isPublished ? 'btn-danger' : 'btn-secondary'} btn-sm" data-deck-id="${deck.id}" data-is-published="${isPublished}">
-          ${isPublished ? '✕ Unpublish' : '✓ Publish'}
-        </button>
-      </div>
+  list.innerHTML = '';
+  editingLibDeck.cards.forEach((card, i) => {
+    const row = document.createElement('div');
+    row.className = 'card-row';
+    row.innerHTML = `
+      <div style="flex:1;"><input type="text" data-i="${i}" data-field="term" value="${Utils.escapeHtml(card.term)}" placeholder="Term" /></div>
+      <div style="flex:1;"><input type="text" data-i="${i}" data-field="definition" value="${Utils.escapeHtml(card.definition)}" placeholder="Definition" /></div>
+      <button class="btn-icon btn-ghost" data-del="${i}" title="Delete card">✕</button>
     `;
+    list.appendChild(row);
   });
-  
-  html += '</div>';
-  container.innerHTML = html;
-  
-  container.querySelectorAll('[data-deck-id]').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const deckId = btn.dataset.deckId;
-      const isPublished = btn.dataset.isPublished === 'true';
-      const deck = student.decks.find(d => d.id === deckId);
-      
-      if (isPublished) {
-        data.publishedDecks = data.publishedDecks.filter(d => d.id !== deckId);
-      } else {
-        data.publishedDecks.push({
-          id: deck.id,
-          title: deck.title,
-          cards: deck.cards,
-          createdBy: selectedStudentId,
-          createdAt: Utils.nowIso()
-        });
-      }
-      await persist();
-      renderDecksTab(student);
+  list.querySelectorAll('input').forEach(inp => {
+    inp.addEventListener('input', (e) => {
+      editingLibDeck.cards[parseInt(e.target.dataset.i, 10)][e.target.dataset.field] = e.target.value;
     });
   });
+  list.querySelectorAll('[data-del]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      editingLibDeck.cards.splice(parseInt(e.target.dataset.del, 10), 1);
+      renderLibEditorCardList();
+    });
+  });
+}
+
+function handleLibEditorImport() {
+  const textarea = document.getElementById('lib-editor-paste');
+  const { cards, skipped } = Utils.parsePastedDeck(textarea.value);
+  if (cards.length === 0) {
+    showToast('No valid lines found — make sure each line has a Tab between term and definition.');
+    return;
+  }
+  // Library cards are content-only (no progress fields — that lives per-student).
+  const libCards = cards.map(c => ({ id: c.id, term: c.term, definition: c.definition }));
+  editingLibDeck.cards.push(...libCards);
+  textarea.value = '';
+  renderLibEditorCardList();
+  showToast(`Added ${libCards.length} card${libCards.length === 1 ? '' : 's'}.${skipped ? ' Skipped ' + skipped + ' line(s).' : ''}`);
+}
+
+async function handleLibEditorSave() {
+  const title = document.getElementById('lib-editor-title').value.trim();
+  if (!title) { showToast('Please give the deck a title.'); return; }
+  editingLibDeck.title = title;
+  editingLibDeck.cards = editingLibDeck.cards.filter(c => c.term.trim() || c.definition.trim());
+  editingLibDeck.updatedAt = Utils.nowIso();
+
+  if (!data.libraryDecks) data.libraryDecks = [];
+  if (isNewLibDeck) {
+    data.libraryDecks.push(editingLibDeck);
+  } else {
+    const idx = data.libraryDecks.findIndex(d => d.id === editingLibDeck.id);
+    data.libraryDecks[idx] = editingLibDeck;
+  }
+  await persist();
+  showToast('Library deck saved — every student studying it will see the update.');
+  closeLibraryEditor();
+}
+
+async function handleLibEditorDelete() {
+  if (!confirm("Delete this library deck for everyone? Students who added it will lose it (and their progress on it). This can't be undone.")) return;
+  data.libraryDecks = data.libraryDecks.filter(d => d.id !== editingLibDeck.id);
+  Object.values(data.students).forEach(s => {
+    if (s.libraryLinks) s.libraryLinks = s.libraryLinks.filter(l => l.libraryDeckId !== editingLibDeck.id);
+  });
+  await persist();
+  showToast('Library deck deleted.');
+  closeLibraryEditor();
 }
