@@ -87,6 +87,28 @@ const Utils = (() => {
     };
   }
 
+  // Same shape as newCard's progress fields, minus term/definition — used
+  // for a student's per-card progress on a library deck (content lives
+  // separately in the library deck itself).
+  function defaultProgress() {
+    return {
+      starred: false,
+      timesSeen: 0,
+      timesCorrect: 0,
+      correctStreak: 0,
+      lastResult: null,
+      lastSeenAt: null,
+      deepLearn: {
+        inDeepLearn: false,
+        learned: false,
+        stage: 0,
+        nextReviewAt: null,
+        addedAt: null,
+        lastReviewedAt: null
+      }
+    };
+  }
+
   // Parses pasted "Term<TAB>Definition" lines (one pair per line).
   // Returns { cards, skipped } — skipped = lines that had no tab character.
   function parsePastedDeck(text) {
@@ -129,7 +151,7 @@ const Utils = (() => {
 
   return {
     genId, nowIso, todayKey, formatDuration, formatDate, formatDateTime, formatTime,
-    nextReviewIso, cardStatus, newCard, parsePastedDeck, escapeHtml, shuffle,
+    nextReviewIso, cardStatus, newCard, defaultProgress, parsePastedDeck, escapeHtml, shuffle,
     DEEP_LEARN_GRADUATE_STAGE
   };
 })();
