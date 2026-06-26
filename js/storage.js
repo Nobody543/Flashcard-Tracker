@@ -4,7 +4,7 @@
    {
      "students": {
        "<studentId>": {
-         name, decks, libraryLinks, deepLearnSettings, sessionLogs, activeSession
+         name, decks, libraryLinks, deepLearnByDeck, sessionLogs, activeSession
        }
      },
      "libraryDecks": [ { id, title, createdAt, updatedAt, cards: [{id,term,definition}] } ]
@@ -41,6 +41,7 @@ const Storage = (() => {
     Object.values(data.students).forEach(s => {
       if (s.libraryLinks === undefined) s.libraryLinks = [];
       if (s.name === undefined) s.name = null;
+      if (s.deepLearnByDeck === undefined) s.deepLearnByDeck = {};
     });
     return data;
   }
@@ -129,7 +130,7 @@ const Storage = (() => {
         name: null,
         decks: [],
         libraryLinks: [],
-        deepLearnSettings: { dailyNewCardTarget: null, dateKey: null, introducedToday: 0 },
+        deepLearnByDeck: {},
         sessionLogs: [],
         activeSession: null
       };
@@ -137,6 +138,7 @@ const Storage = (() => {
     const s = data.students[studentId];
     if (s.libraryLinks === undefined) s.libraryLinks = [];
     if (s.name === undefined) s.name = null;
+    if (s.deepLearnByDeck === undefined) s.deepLearnByDeck = {};
     return s;
   }
 
