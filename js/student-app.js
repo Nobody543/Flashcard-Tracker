@@ -508,8 +508,11 @@ async function handleEditorDelete() {
 /* Deck detail (browse / star / launch study)                             */
 /* ---------------------------------------------------------------------- */
 
+let deckFilter = 'all'; // 'all' | 'starred' | 'needs' — which group is currently shown in deck detail
+
 function openDeckDetail(ref) {
   currentDeckRef = ref;
+  deckFilter = 'all';
   renderDeckDetail();
 }
 
@@ -519,9 +522,14 @@ function renderDeckDetail() {
   if (!view) { renderDecksView(); return; }
   showView('view-deck-detail');
   setTopbarTitle(view.title);
+
   const cards = getDeckCards(ref);
-  const needsPractice = cards.filter(c => Utils.cardStatus(c) === 'red').length;
-  const starredCount = cards.filter(c => c.starred).length;
+  const starredCards = cards.filter(c => c.starred);
+  const needsCards = cards.filter(c => Utils.cardStatus(c) === 'red');
+  const filterMap = { all: cards, starred: starredCards, needs: needsCards };
+  const filterHeadings = { all: 'All cards', starred: 'Starred cards', needs: 'Cards needing practice' };
+  if (!filterMap[deckFilter]) deckFilter = 'all';
+  const activeCards = filterMap[deckFilter];
 
   const detailView = document.getElementById('view-deck-detail');
   detailView.innerHTML = `
@@ -538,22 +546,31 @@ function renderDeckDetail() {
           : '<button class="btn btn-secondary btn-sm" id="detail-edit-btn">Edit deck</button>'}
       </div>
     </div>
-    <div class="row gap-sm mt-sm" style="flex-wrap:wrap;">
-      <button class="btn btn-primary" id="study-all-btn" ${cards.length === 0 ? 'disabled' : ''}>Study all (${cards.length})</button>
-      <button class="btn btn-secondary" id="study-starred-btn" ${starredCount === 0 ? 'disabled' : ''}>Study starred (${starredCount})</button>
-      <button class="btn btn-secondary" id="study-needs-btn" ${needsPractice === 0 ? 'disabled' : ''}>Needs practice (${needsPractice})</button>
-      <button class="btn btn-purple" id="study-deep-btn" ${cards.length === 0 ? 'disabled' : ''}>🧠 Deep Learn</button>
+
+    <div class="row gap-sm mt-md" style="flex-wrap:wrap;">
+      <button class="btn ${deckFilter === 'all' ? 'btn-primary' : 'btn-secondary'} btn-sm" data-filter="all">All (${cards.length})</button>
+      <button class="btn ${deckFilter === 'starred' ? 'btn-primary' : 'btn-secondary'} btn-sm" data-filter="starred">Starred (${starredCards.length})</button>
+      <button class="btn ${deckFilter === 'needs' ? 'btn-primary' : 'btn-secondary'} btn-sm" data-filter="needs">Needs practice (${needsCards.length})</button>
     </div>
-    <h3 class="mt-lg">All cards</h3>
+
+    <div class="row gap-sm mt-sm" style="flex-wrap:wrap;">
+      <button class="btn btn-primary" id="open-flashcards-btn" ${activeCards.length === 0 ? 'disabled' : ''}>📇 Flashcards</button>
+      <button class="btn btn-purple" id="open-deep-learn-btn">🧠 Deep Learn</button>
+    </div>
+
+    <h3 class="mt-lg">${filterHeadings[deckFilter]}</h3>
     <div id="detail-card-list"></div>
   `;
 
   const list = document.getElementById('detail-card-list');
-  if (cards.length === 0) {
-    list.innerHTML = `<div class="empty-state"><h3>No cards in this deck yet</h3><p>${view.isLibrary ? 'Ask your tutor to add some cards to it.' : 'Edit the deck to paste in some terms and definitions.'}</p></div>`;
+  if (activeCards.length === 0) {
+    const msg = deckFilter === 'starred' ? 'Star some cards below to see them collected here.'
+      : deckFilter === 'needs' ? "Nothing needs practice right now — nice work!"
+      : (view.isLibrary ? 'Ask your tutor to add some cards to it.' : 'Edit the deck to paste in some terms and definitions.');
+    list.innerHTML = `<div class="empty-state"><h3>No cards here</h3><p>${msg}</p></div>`;
   } else {
     list.innerHTML = '';
-    cards.forEach(card => {
+    activeCards.forEach(card => {
       const status = Utils.cardStatus(card);
       const row = document.createElement('div');
       row.className = 'card-row';
@@ -586,13 +603,19 @@ function renderDeckDetail() {
     renderDecksView();
   });
 
-  document.getElementById('study-all-btn').addEventListener('click', () =>
-    startStudyRound(cards.map(c => ({ ref: c.ref, cardId: c.id })), 'all', { type: 'study', returnTo: 'deckDetail' }));
-  document.getElementById('study-starred-btn').addEventListener('click', () =>
-    startStudyRound(cards.filter(c => c.starred).map(c => ({ ref: c.ref, cardId: c.id })), 'starred', { type: 'study', returnTo: 'deckDetail' }));
-  document.getElementById('study-needs-btn').addEventListener('click', () =>
-    startStudyRound(cards.filter(c => Utils.cardStatus(c) === 'red').map(c => ({ ref: c.ref, cardId: c.id })), 'needs', { type: 'study', returnTo: 'deckDetail' }));
-  document.getElementById('study-deep-btn').addEventListener('click', () => renderDeepLearnHome());
+  detailView.querySelectorAll('[data-filter]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      deckFilter = btn.dataset.filter;
+      renderDeckDetail();
+    });
+  });
+
+  document.getElementById('open-flashcards-btn').addEventListener('click', () =>
+    startStudyRound(activeCards.map(c => ({ ref: c.ref, cardId: c.id })), deckFilter, { type: 'study', returnTo: 'deckDetail' }));
+  document.getElementById('open-deep-learn-btn').addEventListener('click', () => {
+    deepLearnFilter = 'new';
+    renderDeepLearnHome();
+  });
 }
 
 /* ---------------------------------------------------------------------- */
@@ -840,6 +863,8 @@ function deepLearnBuckets(ref) {
   return { cards, notStarted, dueNow, learned };
 }
 
+let deepLearnFilter = 'new'; // 'new' | 'due' | 'learned' — which bucket is currently shown
+
 function renderDeepLearnHome() {
   session = null;
   const ref = currentDeckRef;
@@ -855,129 +880,103 @@ function renderDeepLearnHome() {
   const remainingToday = target ? Math.max(0, target - introduced) : 0;
   const availableNew = Math.min(remainingToday, notStarted.length);
 
+  if (!['new', 'due', 'learned'].includes(deepLearnFilter)) deepLearnFilter = 'new';
+
+  // Resolve the active list + action for whichever bucket is selected
+  let activeList = [];
+  let emptyMsg = '';
+  let actionLabel = '';
+  let onStart = null;
+  let needsSetup = false;
+
+  if (deepLearnFilter === 'new') {
+    if (!target) {
+      needsSetup = true;
+    } else {
+      activeList = notStarted.slice(0, availableNew); // next N in deck order, not random
+      emptyMsg = remainingToday === 0
+        ? `You've reached today's goal of ${target} new card${target === 1 ? '' : 's'} for this deck. Add more below, or come back tomorrow.`
+        : 'No more new cards left in this deck — nice work!';
+      actionLabel = `Start learning ${activeList.length === 1 ? 'this card' : `these ${activeList.length} cards`}`;
+      onStart = () => {
+        activeList.forEach(c => {
+          const progress = getProgress(c.ref, c.id);
+          progress.deepLearn.inDeepLearn = true;
+          progress.deepLearn.addedAt = Utils.nowIso();
+          progress.deepLearn.stage = 0;
+          progress.deepLearn.nextReviewAt = Utils.nowIso();
+        });
+        settings.introducedToday = introduced + activeList.length;
+        persist();
+        startStudyRound(activeList.map(c => ({ ref: c.ref, cardId: c.id })), 'new', { type: 'deepLearnNew', returnTo: 'deepLearnHome' });
+      };
+    }
+  } else if (deepLearnFilter === 'due') {
+    activeList = dueNow;
+    emptyMsg = 'Nothing due right now in this deck — check back later.';
+    actionLabel = `Start reviewing ${activeList.length === 1 ? 'this card' : `these ${activeList.length} cards`}`;
+    onStart = () => startStudyRound(activeList.map(c => ({ ref: c.ref, cardId: c.id })), 'due', { type: 'deepLearnDue', returnTo: 'deepLearnHome' });
+  } else {
+    activeList = learned;
+    emptyMsg = "You haven't fully learnt any cards in this deck yet — keep going!";
+    actionLabel = `Recap ${activeList.length === 1 ? 'this card' : `these ${activeList.length} cards`}`;
+    onStart = () => startStudyRound(activeList.map(c => ({ ref: c.ref, cardId: c.id })), 'recap', { type: 'deepLearnReview', returnTo: 'deepLearnHome', deepLearnAction: 'recap' });
+  }
+
   const dlView = document.getElementById('view-deep-learn');
   dlView.innerHTML = `
     <button class="btn btn-ghost btn-sm" id="dl-back-btn">← ${Utils.escapeHtml(view.title)}</button>
     <h1 class="mt-md">Deep Learn</h1>
-    <p class="muted">Learn a handful of new cards each day, then come back throughout the day to lock them in. Tap any section below to see exactly which cards are included before you start.</p>
+    <p class="muted">Learn a handful of new cards each day, then come back throughout the day to lock them in.</p>
 
-    <div class="dl-stat-grid">
-      <div class="dl-stat-card"><div class="num">${introduced}${target ? '/' + target : ''}</div><div class="lbl">New today</div></div>
-      <div class="dl-stat-card"><div class="num">${dueNow.length}</div><div class="lbl">Due now</div></div>
-      <div class="dl-stat-card"><div class="num">${learned.length}</div><div class="lbl">Learned</div></div>
+    <div class="row gap-sm mt-md" style="flex-wrap:wrap;">
+      <button class="btn ${deepLearnFilter === 'new' ? 'btn-purple' : 'btn-secondary'} btn-sm" data-dl-filter="new">New today ${target ? `(${introduced}/${target})` : ''}</button>
+      <button class="btn ${deepLearnFilter === 'due' ? 'btn-purple' : 'btn-secondary'} btn-sm" data-dl-filter="due">Due now (${dueNow.length})</button>
+      <button class="btn ${deepLearnFilter === 'learned' ? 'btn-purple' : 'btn-secondary'} btn-sm" data-dl-filter="learned">Previously learnt (${learned.length})</button>
     </div>
 
-    <div class="dl-action-list">
-      <div class="dl-action" id="bucket-new-row" style="cursor:pointer;">
-        <div>
-          <div class="ti">New today</div>
-          <div class="sub">${target ? `${availableNew} ready to introduce` : "Tap to set how many you'd like to learn today"}</div>
+    <div id="dl-bucket-content" class="mt-md">
+      ${needsSetup ? `
+        <div class="empty-state">
+          <h3>Set up today's goal</h3>
+          <p>Choose how many new cards from this deck you'd like to learn today.</p>
+          <button class="btn btn-purple mt-md" id="dl-setup-target-btn">Set up</button>
         </div>
-        <div class="row gap-sm">
-          ${target ? `<button class="btn btn-ghost btn-sm" id="increase-target-btn">+ Add more</button>` : ''}
-          <span class="faint">→</span>
-        </div>
-      </div>
-      <div class="dl-action" id="bucket-due-row" style="cursor:pointer;">
-        <div>
-          <div class="ti">Due now</div>
-          <div class="sub">${dueNow.length} card${dueNow.length === 1 ? '' : 's'} ready right now</div>
-        </div>
-        <span class="faint">→</span>
-      </div>
-      <div class="dl-action" id="bucket-learned-row" style="cursor:pointer;">
-        <div>
-          <div class="ti">Previously learnt</div>
-          <div class="sub">${learned.length} card${learned.length === 1 ? '' : 's'} learnt so far — recap any time</div>
-        </div>
-        <span class="faint">→</span>
-      </div>
+      ` : `
+        ${deepLearnFilter === 'new' ? `
+          <div class="row-between mt-sm" style="margin-bottom:12px;">
+            <span class="muted">${availableNew} ready to introduce, in deck order</span>
+            <button class="btn btn-ghost btn-sm" id="increase-target-btn">+ Add more today</button>
+          </div>
+        ` : ''}
+        ${activeList.length === 0
+          ? `<div class="empty-state"><h3>Nothing here right now</h3><p>${emptyMsg}</p></div>`
+          : `<div id="dl-card-list"></div><button class="btn btn-purple btn-block mt-lg" id="dl-start-btn">${actionLabel}</button>`}
+      `}
     </div>
   `;
 
-  document.getElementById('dl-back-btn').addEventListener('click', () => openDeckDetail(ref));
-  document.getElementById('bucket-new-row').addEventListener('click', (e) => {
-    if (e.target.id === 'increase-target-btn') return;
-    renderDeepLearnPreview('new');
-  });
-  document.getElementById('bucket-due-row').addEventListener('click', () => renderDeepLearnPreview('due'));
-  document.getElementById('bucket-learned-row').addEventListener('click', () => renderDeepLearnPreview('learned'));
-  const incBtn = document.getElementById('increase-target-btn');
-  if (incBtn) incBtn.addEventListener('click', (e) => { e.stopPropagation(); promptDailyTarget(false); });
-}
-
-// Shows exactly which cards are in a bucket before committing to study
-// them — "new" | "due" | "learned".
-function renderDeepLearnPreview(bucketType) {
-  const ref = currentDeckRef;
-  const view = getDeckView(ref);
-  if (!view) { renderDecksView(); return; }
-  const settings = ensureDeepLearnDay(ref);
-  const { notStarted, dueNow, learned } = deepLearnBuckets(ref);
-
-  let list, title, emptyMsg, onStart;
-
-  if (bucketType === 'new') {
-    const target = settings.dailyNewCardTarget;
-    if (!target) { promptDailyTarget(true); return; }
-    const introduced = settings.introducedToday || 0;
-    const remainingToday = Math.max(0, target - introduced);
-    const availableNew = Math.min(remainingToday, notStarted.length);
-    list = notStarted.slice(0, availableNew); // next N in deck order, not random
-    title = 'New today';
-    emptyMsg = remainingToday === 0
-      ? `You've reached today's goal of ${target} new card${target === 1 ? '' : 's'} for this deck. Tap "+ Add more" on the previous screen, or come back tomorrow.`
-      : 'No more new cards left in this deck — nice work!';
-    onStart = () => {
-      list.forEach(c => {
-        const progress = getProgress(c.ref, c.id);
-        progress.deepLearn.inDeepLearn = true;
-        progress.deepLearn.addedAt = Utils.nowIso();
-        progress.deepLearn.stage = 0;
-        progress.deepLearn.nextReviewAt = Utils.nowIso();
-      });
-      settings.introducedToday = introduced + list.length;
-      persist();
-      startStudyRound(list.map(c => ({ ref: c.ref, cardId: c.id })), 'new', { type: 'deepLearnNew', returnTo: 'deepLearnHome' });
-    };
-  } else if (bucketType === 'due') {
-    list = dueNow;
-    title = 'Due now';
-    emptyMsg = 'Nothing due right now in this deck — check back later.';
-    onStart = () => startStudyRound(list.map(c => ({ ref: c.ref, cardId: c.id })), 'due', { type: 'deepLearnDue', returnTo: 'deepLearnHome' });
-  } else {
-    list = learned;
-    title = 'Previously learnt';
-    emptyMsg = "You haven't fully learnt any cards in this deck yet — keep going!";
-    onStart = () => startStudyRound(list.map(c => ({ ref: c.ref, cardId: c.id })), 'recap', { type: 'deepLearnReview', returnTo: 'deepLearnHome', deepLearnAction: 'recap' });
-  }
-
-  showView('view-deep-learn-preview');
-  setTopbarTitle(title);
-  const previewView = document.getElementById('view-deep-learn-preview');
-  previewView.innerHTML = `
-    <button class="btn btn-ghost btn-sm" id="preview-back-btn">← Deep Learn</button>
-    <h1 class="mt-md">${title}</h1>
-    <p class="muted">${list.length} card${list.length === 1 ? '' : 's'} ${bucketType === 'learned' ? 'learnt so far' : (bucketType === 'due' ? 'ready to review' : 'about to be introduced, in deck order')}.</p>
-    <div id="preview-card-list" class="mt-md"></div>
-    ${list.length > 0 ? `<button class="btn btn-purple btn-block mt-lg" id="preview-start-btn">Start reviewing ${list.length === 1 ? 'this card' : `these ${list.length} cards`}</button>` : ''}
-  `;
-
-  const listEl = document.getElementById('preview-card-list');
-  if (list.length === 0) {
-    listEl.innerHTML = `<div class="empty-state"><h3>Nothing here right now</h3><p>${emptyMsg}</p></div>`;
-  } else {
-    listEl.innerHTML = list.map(c => `
+  if (!needsSetup && activeList.length > 0) {
+    document.getElementById('dl-card-list').innerHTML = activeList.map(c => `
       <div class="card-row">
         <span class="term">${Utils.escapeHtml(c.term)}</span>
         <span class="definition">${Utils.escapeHtml(c.definition)}</span>
       </div>
     `).join('');
+    document.getElementById('dl-start-btn').addEventListener('click', onStart);
   }
 
-  document.getElementById('preview-back-btn').addEventListener('click', renderDeepLearnHome);
-  const startBtn = document.getElementById('preview-start-btn');
-  if (startBtn) startBtn.addEventListener('click', onStart);
+  document.getElementById('dl-back-btn').addEventListener('click', () => openDeckDetail(ref));
+  dlView.querySelectorAll('[data-dl-filter]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      deepLearnFilter = btn.dataset.dlFilter;
+      renderDeepLearnHome();
+    });
+  });
+  const setupBtn = document.getElementById('dl-setup-target-btn');
+  if (setupBtn) setupBtn.addEventListener('click', () => promptDailyTarget(true));
+  const incBtn = document.getElementById('increase-target-btn');
+  if (incBtn) incBtn.addEventListener('click', () => promptDailyTarget(false));
 }
 
 function promptDailyTarget(isFirstTime) {
