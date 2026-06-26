@@ -616,6 +616,8 @@ function renderDeckDetail() {
 /* mix cards from several decks (own and/or library) at once.            */
 /* ---------------------------------------------------------------------- */
 
+let shufflePreference = false; // remembered across rounds for this visit; Quizlet-style toggle
+
 function startStudyRound(items, subtype, opts) {
   if (!items || items.length === 0) { showToast('No cards in this group yet.'); return; }
   ensureSessionActive();
@@ -625,13 +627,35 @@ function startStudyRound(items, subtype, opts) {
     subtype,
     returnTo: opts.returnTo,
     deepLearnAction: opts.deepLearnAction || null,
-    items: Utils.shuffle(items),
+    orderedItems: items.slice(), // the deck's natural order, never mutated
+    items: [],                   // current working order (history + remaining)
+    shuffleOn: shufflePreference,
     index: 0,
     wrongItems: [],
     flipped: false
   };
+  applyOrderToRemaining();
   showView('view-study');
   setTopbarTitle(session.type.startsWith('deepLearn') ? 'Deep Learn' : 'Studying');
+  renderStudyCard();
+}
+
+// Keeps already-answered cards exactly where they were (history shouldn't
+// jump around) and reorders only the cards not yet seen: in original deck
+// order if shuffle is off, or freshly shuffled if it's on.
+function applyOrderToRemaining() {
+  const itemKey = it => `${it.ref.type}:${it.ref.id}:${it.cardId}`;
+  const seenSlice = session.items.slice(0, session.index);
+  const seenKeys = new Set(seenSlice.map(itemKey));
+  const notSeenInOrder = session.orderedItems.filter(it => !seenKeys.has(itemKey(it)));
+  const remaining = session.shuffleOn ? Utils.shuffle(notSeenInOrder) : notSeenInOrder;
+  session.items = [...seenSlice, ...remaining];
+}
+
+function toggleShuffle() {
+  session.shuffleOn = !session.shuffleOn;
+  shufflePreference = session.shuffleOn;
+  applyOrderToRemaining();
   renderStudyCard();
 }
 
@@ -647,6 +671,10 @@ function renderStudyCard() {
   view.innerHTML = `
     <div class="study-wrap">
       <div class="study-progress">
+        <div class="row-between" style="margin-bottom:6px;">
+          <span></span>
+          <button class="btn ${session.shuffleOn ? 'btn-purple' : 'btn-secondary'} btn-sm" id="shuffle-toggle-btn" title="Shuffle remaining cards">🔀 Shuffle: ${session.shuffleOn ? 'On' : 'Off'}</button>
+        </div>
         <div class="progress-track"><div class="progress-fill" style="width:${(session.index / session.items.length * 100)}%; ${isDeep ? 'background:var(--purple);' : ''}"></div></div>
         <div class="progress-label"><span>Card ${session.index + 1} of ${session.items.length}</span><span>${session.wrongItems.length} to review again</span></div>
       </div>
@@ -674,6 +702,7 @@ function renderStudyCard() {
     </div>
   `;
 
+  document.getElementById('shuffle-toggle-btn').addEventListener('click', toggleShuffle);
   document.getElementById('flip-card').addEventListener('click', () => {
     session.flipped = !session.flipped;
     renderStudyCard();
@@ -739,9 +768,10 @@ function applyDeepLearnResult(progress, correct) {
 }
 
 function finishStudyRound() {
-  const total = session.items.length;
-  const wrong = session.wrongItems.length;
-  const correct = total - wrong;
+  const seen = session.index;                  // cards actually answered
+  const wrong = session.wrongItems.length;      // subset of seen
+  const correct = seen - wrong;
+  const notSeen = session.items.length - seen;  // only > 0 if ended early
 
   showView('view-summary');
   setTopbarTitle('Round complete');
@@ -752,6 +782,7 @@ function finishStudyRound() {
       <div class="summary-stat-row">
         <div class="summary-stat"><div class="num" style="color:var(--green)">${correct}</div><div class="lbl">Got it</div></div>
         <div class="summary-stat"><div class="num" style="color:var(--red)">${wrong}</div><div class="lbl">Still learning</div></div>
+        ${notSeen > 0 ? `<div class="summary-stat"><div class="num" style="color:var(--text-faint)">${notSeen}</div><div class="lbl">Not seen</div></div>` : ''}
       </div>
       <div class="summary-actions">
         ${wrong > 0 ? `<button class="btn btn-primary btn-block" id="review-wrong-btn">Review the ${wrong} you got wrong</button>` : ''}
@@ -764,16 +795,24 @@ function finishStudyRound() {
   if (wrong > 0) {
     document.getElementById('review-wrong-btn').addEventListener('click', () => {
       const { type, deepLearnAction, returnTo, wrongItems } = session;
-      session = { type, subtype: 'retry', returnTo, deepLearnAction, items: Utils.shuffle(wrongItems), index: 0, wrongItems: [], flipped: false };
+      session = {
+        type, subtype: 'retry', returnTo, deepLearnAction,
+        orderedItems: wrongItems.slice(),
+        items: [],
+        shuffleOn: shufflePreference,
+        index: 0, wrongItems: [], flipped: false
+      };
+      applyOrderToRemaining();
       showView('view-study');
       renderStudyCard();
     });
   }
   document.getElementById('summary-done-btn').addEventListener('click', () => {
     const returnTo = session.returnTo;
+    const deckRef = currentDeckRef;
     session = null;
     if (returnTo === 'deepLearn') renderDeepLearnHome();
-    else renderDeckDetail();
+    else openDeckDetail(deckRef);
   });
 }
 
