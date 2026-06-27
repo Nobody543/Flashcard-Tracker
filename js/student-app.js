@@ -634,7 +634,6 @@ function startStudyRound(items, subtype, opts) {
     type: opts.type,
     subtype,
     returnTo: opts.returnTo,
-    deepLearnAction: opts.deepLearnAction || null,
     orderedItems: items.slice(), // the deck's natural order, never mutated
     items: [],                   // current working order (history + remaining)
     shuffleOn: shufflePreference,
@@ -644,7 +643,7 @@ function startStudyRound(items, subtype, opts) {
   };
   applyOrderToRemaining();
   showView('view-study');
-  setTopbarTitle(session.type.startsWith('deepLearn') ? 'Deep Learn' : 'Studying');
+  setTopbarTitle(session.type === 'deepLearn' ? 'Deep Learn' : 'Studying');
   renderStudyCard();
 }
 
@@ -673,7 +672,7 @@ function renderStudyCard() {
   const { ref, cardId } = session.items[session.index];
   const card = mergedCard(ref, cardId);
   if (!card) { session.index++; renderStudyCard(); return; }
-  const isDeep = session.type.startsWith('deepLearn');
+  const isDeep = session.type === 'deepLearn';
   const view = document.getElementById('view-study');
 
   view.innerHTML = `
@@ -744,7 +743,7 @@ async function answerCard(correct) {
     session.wrongItems.push({ ref, cardId });
   }
 
-  if (session.type.startsWith('deepLearn') && session.deepLearnAction !== 'recap') {
+  if (session.type === 'deepLearn') {
     applyDeepLearnResult(progress, correct);
   }
 
@@ -756,19 +755,17 @@ async function answerCard(correct) {
   renderStudyCard();
 }
 
+// Day-based spaced repetition: 1, 2, 4, 7, 10, 14, 21, 28 days, then it
+// keeps repeating every 28 days forever (no graduation). A wrong answer
+// always resets straight back to the 1-day stage.
 function applyDeepLearnResult(progress, correct) {
   const dl = progress.deepLearn;
+  if (!dl.addedAt) dl.addedAt = Utils.nowIso(); // first-ever exposure to this card in Deep Learn
   dl.lastReviewedAt = Utils.nowIso();
+  dl.inDeepLearn = true;
   if (correct) {
-    const nextStage = dl.stage + 1;
-    if (nextStage >= Utils.DEEP_LEARN_GRADUATE_STAGE) {
-      dl.learned = true;
-      dl.inDeepLearn = false;
-      dl.nextReviewAt = null;
-    } else {
-      dl.stage = nextStage;
-      dl.nextReviewAt = Utils.nextReviewIso(nextStage);
-    }
+    dl.nextReviewAt = Utils.nextReviewIso(dl.stage); // interval for the stage just passed
+    dl.stage = Math.min(dl.stage + 1, Utils.DEEP_LEARN_INTERVALS_DAYS.length - 1);
   } else {
     dl.stage = 0;
     dl.nextReviewAt = Utils.nextReviewIso(0);
@@ -802,9 +799,9 @@ function finishStudyRound() {
 
   if (wrong > 0) {
     document.getElementById('review-wrong-btn').addEventListener('click', () => {
-      const { type, deepLearnAction, returnTo, wrongItems } = session;
+      const { type, returnTo, wrongItems } = session;
       session = {
-        type, subtype: 'retry', returnTo, deepLearnAction,
+        type, subtype: 'retry', returnTo,
         orderedItems: wrongItems.slice(),
         items: [],
         shuffleOn: shufflePreference,
@@ -825,145 +822,93 @@ function finishStudyRound() {
 }
 
 /* ---------------------------------------------------------------------- */
-/* Deep Learn home — pools cards from ALL own + added library decks       */
+/* Deep Learn — a mode entered from within a single deck. Cards are        */
+/* reviewed on a day-based spaced schedule (see Utils.DEEP_LEARN_INTERVALS_DAYS). */
 /* ---------------------------------------------------------------------- */
 
-/* ---------------------------------------------------------------------- */
-/* Deep Learn — a mode entered from within a single deck. Each deck has   */
-/* its own daily new-card target and "introduced today" counter.         */
-/* ---------------------------------------------------------------------- */
-
-function deepLearnKey(ref) { return `${ref.type}:${ref.id}`; }
-
-function getDeepLearnSettings(ref) {
-  if (!student.deepLearnByDeck) student.deepLearnByDeck = {};
-  const key = deepLearnKey(ref);
-  if (!student.deepLearnByDeck[key]) {
-    student.deepLearnByDeck[key] = { dailyNewCardTarget: null, dateKey: null, introducedToday: 0 };
-  }
-  return student.deepLearnByDeck[key];
-}
-
-function ensureDeepLearnDay(ref) {
-  const settings = getDeepLearnSettings(ref);
-  const today = Utils.todayKey();
-  if (settings.dateKey !== today) {
-    settings.dateKey = today;
-    settings.introducedToday = 0;
-  }
-  return settings;
-}
-
-// Computes the three buckets for a deck, scoped to just that deck.
+// Slices a deck's cards into the 5 boxes shown on the Deep Learn page.
+// "all" is every card, deliberately overlapping with the rest — the other
+// four are independent lenses on the same schedule data, not a strict
+// partition, since a card can genuinely be true for more than one (e.g.
+// reviewed today AND next due tomorrow).
 function deepLearnBuckets(ref) {
   const cards = getDeckCards(ref);
-  const notStarted = cards.filter(c => !c.deepLearn.inDeepLearn && !c.deepLearn.learned);
-  const dueNow = cards.filter(c => c.deepLearn.inDeepLearn && !c.deepLearn.learned && c.deepLearn.nextReviewAt && new Date(c.deepLearn.nextReviewAt) <= new Date());
-  const learned = cards.filter(c => c.deepLearn.learned);
-  return { cards, notStarted, dueNow, learned };
+  const todayKey = Utils.todayKey();
+  const tomorrowKey = Utils.dateKeyOffset(1);
+  const twoDaysKey = Utils.dateKeyOffset(2);
+
+  const today = cards.filter(c => {
+    const reviewedToday = Utils.dateKeyFromIso(c.deepLearn.lastReviewedAt) === todayKey;
+    const learntToday = Utils.dateKeyFromIso(c.deepLearn.addedAt) === todayKey;
+    return reviewedToday || learntToday;
+  });
+  const tomorrow = cards.filter(c => Utils.dateKeyFromIso(c.deepLearn.nextReviewAt) === tomorrowKey);
+  const twoDays = cards.filter(c => Utils.dateKeyFromIso(c.deepLearn.nextReviewAt) === twoDaysKey);
+  // Everything else: never started, overdue, due today (not yet reviewed), or 3+ days out.
+  const later = cards.filter(c => {
+    const key = Utils.dateKeyFromIso(c.deepLearn.nextReviewAt);
+    return key !== tomorrowKey && key !== twoDaysKey;
+  });
+
+  return { all: cards, today, tomorrow, twoDays, later };
 }
 
-let deepLearnFilter = 'new'; // 'new' | 'due' | 'learned' — which bucket is currently shown
+let deepLearnFilter = 'all'; // 'all' | 'today' | 'tomorrow' | 'twoDays' | 'later'
 
 function renderDeepLearnHome() {
   session = null;
   const ref = currentDeckRef;
   const view = getDeckView(ref);
   if (!view) { renderDecksView(); return; }
-  const settings = ensureDeepLearnDay(ref);
   showView('view-deep-learn');
   setTopbarTitle(`Deep Learn — ${view.title}`);
 
-  const { notStarted, dueNow, learned } = deepLearnBuckets(ref);
-  const target = settings.dailyNewCardTarget;
-  const introduced = settings.introducedToday || 0;
-  const remainingToday = target ? Math.max(0, target - introduced) : 0;
-  const availableNew = Math.min(remainingToday, notStarted.length);
+  const buckets = deepLearnBuckets(ref);
+  if (!['all', 'today', 'tomorrow', 'twoDays', 'later'].includes(deepLearnFilter)) deepLearnFilter = 'all';
 
-  if (!['new', 'due', 'learned'].includes(deepLearnFilter)) deepLearnFilter = 'new';
-
-  // Resolve the active list + action for whichever bucket is selected
-  let activeList = [];
-  let emptyMsg = '';
-  let actionLabel = '';
-  let onStart = null;
-  let needsSetup = false;
-
-  if (deepLearnFilter === 'new') {
-    if (!target) {
-      needsSetup = true;
-    } else {
-      activeList = notStarted.slice(0, availableNew); // next N in deck order, not random
-      emptyMsg = remainingToday === 0
-        ? `You've reached today's goal of ${target} new card${target === 1 ? '' : 's'} for this deck. Add more below, or come back tomorrow.`
-        : 'No more new cards left in this deck — nice work!';
-      actionLabel = `Start learning ${activeList.length === 1 ? 'this card' : `these ${activeList.length} cards`}`;
-      onStart = () => {
-        activeList.forEach(c => {
-          const progress = getProgress(c.ref, c.id);
-          progress.deepLearn.inDeepLearn = true;
-          progress.deepLearn.addedAt = Utils.nowIso();
-          progress.deepLearn.stage = 0;
-          progress.deepLearn.nextReviewAt = Utils.nowIso();
-        });
-        settings.introducedToday = introduced + activeList.length;
-        persist();
-        startStudyRound(activeList.map(c => ({ ref: c.ref, cardId: c.id })), 'new', { type: 'deepLearnNew', returnTo: 'deepLearnHome' });
-      };
-    }
-  } else if (deepLearnFilter === 'due') {
-    activeList = dueNow;
-    emptyMsg = 'Nothing due right now in this deck — check back later.';
-    actionLabel = `Start reviewing ${activeList.length === 1 ? 'this card' : `these ${activeList.length} cards`}`;
-    onStart = () => startStudyRound(activeList.map(c => ({ ref: c.ref, cardId: c.id })), 'due', { type: 'deepLearnDue', returnTo: 'deepLearnHome' });
-  } else {
-    activeList = learned;
-    emptyMsg = "You haven't fully learnt any cards in this deck yet — keep going!";
-    actionLabel = `Recap ${activeList.length === 1 ? 'this card' : `these ${activeList.length} cards`}`;
-    onStart = () => startStudyRound(activeList.map(c => ({ ref: c.ref, cardId: c.id })), 'recap', { type: 'deepLearnReview', returnTo: 'deepLearnHome', deepLearnAction: 'recap' });
-  }
+  const bucketHeadings = {
+    all: 'All cards', today: 'Reviewed or learnt today', tomorrow: 'Due tomorrow',
+    twoDays: 'Due in two days', later: 'Due later'
+  };
+  const emptyMessages = {
+    all: 'This deck has no cards yet.',
+    today: "You haven't reviewed or learnt anything from this deck yet today.",
+    tomorrow: 'Nothing scheduled for tomorrow.',
+    twoDays: 'Nothing scheduled for two days from now.',
+    later: 'Nothing scheduled further out right now.'
+  };
+  const activeList = buckets[deepLearnFilter];
+  const actionVerb = deepLearnFilter === 'all' ? 'Study' : 'Review';
 
   const dlView = document.getElementById('view-deep-learn');
   dlView.innerHTML = `
     <button class="btn btn-ghost btn-sm" id="dl-back-btn">← ${Utils.escapeHtml(view.title)}</button>
     <h1 class="mt-md">Deep Learn</h1>
-    <p class="muted">Learn a handful of new cards each day, then come back throughout the day to lock them in.</p>
+    <p class="muted">Cards are reviewed on a spaced schedule — 1, 2, 4, 7, 10, 14, 21 days, then every 28 days from there. Getting one wrong resets it back to 1 day.</p>
 
     <div class="row gap-sm mt-md" style="flex-wrap:wrap;">
-      <button class="btn ${deepLearnFilter === 'new' ? 'btn-purple' : 'btn-secondary'} btn-sm" data-dl-filter="new">New today ${target ? `(${introduced}/${target})` : ''}</button>
-      <button class="btn ${deepLearnFilter === 'due' ? 'btn-purple' : 'btn-secondary'} btn-sm" data-dl-filter="due">Due now (${dueNow.length})</button>
-      <button class="btn ${deepLearnFilter === 'learned' ? 'btn-purple' : 'btn-secondary'} btn-sm" data-dl-filter="learned">Previously learnt (${learned.length})</button>
+      <button class="btn ${deepLearnFilter === 'all' ? 'btn-purple' : 'btn-secondary'} btn-sm" data-dl-filter="all">All (${buckets.all.length})</button>
+      <button class="btn ${deepLearnFilter === 'today' ? 'btn-purple' : 'btn-secondary'} btn-sm" data-dl-filter="today">Today (${buckets.today.length})</button>
+      <button class="btn ${deepLearnFilter === 'tomorrow' ? 'btn-purple' : 'btn-secondary'} btn-sm" data-dl-filter="tomorrow">Review tomorrow (${buckets.tomorrow.length})</button>
+      <button class="btn ${deepLearnFilter === 'twoDays' ? 'btn-purple' : 'btn-secondary'} btn-sm" data-dl-filter="twoDays">Review in two days (${buckets.twoDays.length})</button>
+      <button class="btn ${deepLearnFilter === 'later' ? 'btn-purple' : 'btn-secondary'} btn-sm" data-dl-filter="later">Review later (${buckets.later.length})</button>
     </div>
 
-    <div id="dl-bucket-content" class="mt-md">
-      ${needsSetup ? `
-        <div class="empty-state">
-          <h3>Set up today's goal</h3>
-          <p>Choose how many new cards from this deck you'd like to learn today.</p>
-          <button class="btn btn-purple mt-md" id="dl-setup-target-btn">Set up</button>
-        </div>
-      ` : `
-        ${deepLearnFilter === 'new' ? `
-          <div class="row-between mt-sm" style="margin-bottom:12px;">
-            <span class="muted">${availableNew} ready to introduce, in deck order</span>
-            <button class="btn btn-ghost btn-sm" id="increase-target-btn">+ Add more today</button>
-          </div>
-        ` : ''}
-        ${activeList.length === 0
-          ? `<div class="empty-state"><h3>Nothing here right now</h3><p>${emptyMsg}</p></div>`
-          : `<div id="dl-card-list"></div><button class="btn btn-purple btn-block mt-lg" id="dl-start-btn">${actionLabel}</button>`}
-      `}
-    </div>
+    <h3 class="mt-lg">${bucketHeadings[deepLearnFilter]}</h3>
+    <div id="dl-card-list"></div>
+    ${activeList.length > 0 ? `<button class="btn btn-purple btn-block mt-lg" id="dl-start-btn">${actionVerb} ${activeList.length === 1 ? 'this card' : `these ${activeList.length} cards`}</button>` : ''}
   `;
 
-  if (!needsSetup && activeList.length > 0) {
-    document.getElementById('dl-card-list').innerHTML = activeList.map(c => `
+  const listEl = document.getElementById('dl-card-list');
+  if (activeList.length === 0) {
+    listEl.innerHTML = `<div class="empty-state"><h3>No cards here</h3><p>${emptyMessages[deepLearnFilter]}</p></div>`;
+  } else {
+    listEl.innerHTML = activeList.map(c => `
       <div class="card-row">
         <span class="term">${Utils.escapeHtml(c.term)}</span>
         <span class="definition">${Utils.escapeHtml(c.definition)}</span>
       </div>
     `).join('');
-    document.getElementById('dl-start-btn').addEventListener('click', onStart);
   }
 
   document.getElementById('dl-back-btn').addEventListener('click', () => openDeckDetail(ref));
@@ -973,37 +918,9 @@ function renderDeepLearnHome() {
       renderDeepLearnHome();
     });
   });
-  const setupBtn = document.getElementById('dl-setup-target-btn');
-  if (setupBtn) setupBtn.addEventListener('click', () => promptDailyTarget(true));
-  const incBtn = document.getElementById('increase-target-btn');
-  if (incBtn) incBtn.addEventListener('click', () => promptDailyTarget(false));
-}
-
-function promptDailyTarget(isFirstTime) {
-  const ref = currentDeckRef;
-  const settings = getDeepLearnSettings(ref);
-  const current = settings.dailyNewCardTarget;
-  const suggestion = isFirstTime ? 10 : (current || 10) + 5;
-  openModal(`
-    <h2>${isFirstTime ? 'How many new cards today?' : "Add more cards to today's goal"}</h2>
-    <p class="muted">${isFirstTime ? "You can always add more later in the day. This is just for this deck." : `Currently learning ${current} new card${current === 1 ? '' : 's'} from this deck today.`}</p>
-    <div class="field">
-      <label>${isFirstTime ? 'New cards today' : "New total for today"}</label>
-      <input type="number" id="target-input" min="1" max="200" value="${suggestion}" />
-    </div>
-    <div class="modal-actions">
-      <button class="btn btn-ghost" id="target-cancel-btn">Cancel</button>
-      <button class="btn btn-purple" id="target-confirm-btn">Confirm</button>
-    </div>
-  `);
-  document.getElementById('target-cancel-btn').addEventListener('click', closeModal);
-  document.getElementById('target-confirm-btn').addEventListener('click', async () => {
-    const val = parseInt(document.getElementById('target-input').value, 10);
-    if (!val || val < 1) { showToast('Enter a number of at least 1.'); return; }
-    if (!isFirstTime && current && val < current) { showToast(`Can't go below today's current target of ${current}.`); return; }
-    settings.dailyNewCardTarget = val;
-    await persist();
-    closeModal();
-    renderDeepLearnHome();
-  });
+  const startBtn = document.getElementById('dl-start-btn');
+  if (startBtn) {
+    startBtn.addEventListener('click', () =>
+      startStudyRound(activeList.map(c => ({ ref: c.ref, cardId: c.id })), deepLearnFilter, { type: 'deepLearn', returnTo: 'deepLearnHome' }));
+  }
 }
