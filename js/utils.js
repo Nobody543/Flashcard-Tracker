@@ -13,9 +13,21 @@ const Utils = (() => {
 
   function nowIso() { return new Date().toISOString(); }
 
-  function todayKey() {
-    const d = new Date();
+  function todayKey() { return dateKeyFromDate(new Date()); }
+
+  function dateKeyFromDate(d) {
     return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+  }
+
+  function dateKeyFromIso(iso) {
+    return iso ? dateKeyFromDate(new Date(iso)) : null;
+  }
+
+  // Date key for "today + N days" (N can be 0).
+  function dateKeyOffset(daysFromToday) {
+    const d = new Date();
+    d.setDate(d.getDate() + daysFromToday);
+    return dateKeyFromDate(d);
   }
 
   function formatDuration(totalSeconds) {
@@ -43,15 +55,17 @@ const Utils = (() => {
     return new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
   }
 
-  // ---- Deep learn spaced-repetition schedule (Leitner-style) ----
-  // Stage index -> minutes until next review. Once a card is answered
-  // correctly at the final stage, it "graduates" (learned = true).
-  const DEEP_LEARN_INTERVALS_MIN = [20, 120, 360, 1440, 4320, 10080]; // 20m, 2h, 6h, 1d, 3d, 7d
-  const DEEP_LEARN_GRADUATE_STAGE = DEEP_LEARN_INTERVALS_MIN.length;
+  // ---- Deep learn spaced-repetition schedule ----
+  // Stage index -> days until next review, counted from the review that
+  // just happened. After the last stage, it keeps repeating every 28 days
+  // forever (no "graduation" — cards stay in rotation indefinitely).
+  // Getting a card wrong resets it straight back to stage 0 (1 day).
+  const DEEP_LEARN_INTERVALS_DAYS = [1, 2, 4, 7, 10, 14, 21, 28];
 
   function nextReviewIso(stage) {
-    const idx = Math.min(stage, DEEP_LEARN_INTERVALS_MIN.length - 1);
-    return new Date(Date.now() + DEEP_LEARN_INTERVALS_MIN[idx] * 60000).toISOString();
+    const idx = Math.min(stage, DEEP_LEARN_INTERVALS_DAYS.length - 1);
+    const days = DEEP_LEARN_INTERVALS_DAYS[idx];
+    return new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString();
   }
 
   // ---- Mastery status used for colour-coding (teacher table + student dots) ----
@@ -150,8 +164,8 @@ const Utils = (() => {
   }
 
   return {
-    genId, nowIso, todayKey, formatDuration, formatDate, formatDateTime, formatTime,
+    genId, nowIso, todayKey, dateKeyFromIso, dateKeyOffset, formatDuration, formatDate, formatDateTime, formatTime,
     nextReviewIso, cardStatus, newCard, defaultProgress, parsePastedDeck, escapeHtml, shuffle,
-    DEEP_LEARN_GRADUATE_STAGE
+    DEEP_LEARN_INTERVALS_DAYS
   };
 })();
