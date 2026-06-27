@@ -112,7 +112,7 @@ function getProgress(ref, cardId) {
 function getContent(ref, cardId) {
   const deck = ref.type === 'own' ? getOwnDeck(ref.id) : getLibraryDeck(ref.id);
   const card = deck && deck.cards.find(c => c.id === cardId);
-  return card ? { term: card.term, definition: card.definition } : null;
+  return card ? { term: card.term, definition: card.definition, image: card.image || null } : null;
 }
 
 // Merged view for rendering/studying: content + this student's progress + ref.
@@ -121,7 +121,7 @@ function mergedCard(ref, cardId) {
   if (!content) return null;
   const progress = getProgress(ref, cardId);
   if (!progress) return null;
-  return { id: cardId, term: content.term, definition: content.definition, ...progress, ref };
+  return { id: cardId, term: content.term, definition: content.definition, image: content.image, ...progress, ref };
 }
 
 // { id, title, isLibrary, ref, cardIds }
@@ -576,6 +576,7 @@ function renderDeckDetail() {
       row.className = 'card-row';
       row.innerHTML = `
         <span class="dot dot-${status}" title="${status}"></span>
+        ${card.image ? `<img src="${Utils.escapeHtml(card.image)}" alt="" style="width:36px; height:36px; object-fit:cover; border-radius:6px; flex-shrink:0;" onerror="this.style.display='none'" />` : ''}
         <span class="term">${Utils.escapeHtml(card.term)}</span>
         <span class="definition">${Utils.escapeHtml(card.definition)}</span>
         <button class="star-btn ${card.starred ? 'starred' : ''}" data-card="${card.id}" title="Star">★</button>
@@ -690,10 +691,12 @@ function renderStudyCard() {
         <div class="flashcard ${session.flipped ? 'flipped' : ''} ${isDeep ? 'deep' : ''}" id="flip-card">
           <div class="flashcard-face flashcard-front">
             <span class="face-label">Term</span>
+            ${card.image ? `<img src="${Utils.escapeHtml(card.image)}" alt="" style="max-width:100%; max-height:120px; object-fit:contain; border-radius:8px; margin-bottom:14px;" onerror="this.style.display='none'" />` : ''}
             <span class="face-text">${Utils.escapeHtml(card.term)}</span>
           </div>
           <div class="flashcard-face flashcard-back">
             <span class="face-label">Definition</span>
+            ${card.image ? `<img src="${Utils.escapeHtml(card.image)}" alt="" style="max-width:100%; max-height:120px; object-fit:contain; border-radius:8px; margin-bottom:14px;" onerror="this.style.display='none'" />` : ''}
             <span class="face-text">${Utils.escapeHtml(card.definition)}</span>
           </div>
         </div>
@@ -905,6 +908,7 @@ function renderDeepLearnHome() {
   } else {
     listEl.innerHTML = activeList.map(c => `
       <div class="card-row">
+        ${c.image ? `<img src="${Utils.escapeHtml(c.image)}" alt="" style="width:36px; height:36px; object-fit:cover; border-radius:6px; flex-shrink:0;" onerror="this.style.display='none'" />` : ''}
         <span class="term">${Utils.escapeHtml(c.term)}</span>
         <span class="definition">${Utils.escapeHtml(c.definition)}</span>
       </div>
