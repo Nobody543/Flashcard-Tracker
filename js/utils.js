@@ -145,6 +145,30 @@ const Utils = (() => {
     return { cards, skipped };
   }
 
+  // Same idea, but for library decks: supports an optional 3rd tab-separated
+  // column with an image path (e.g. "Term<TAB>Definition<TAB>images/x.png").
+  // Returns plain content-only card objects (no progress fields).
+  function parsePastedLibraryDeck(text) {
+    const lines = text.split(/\r?\n/);
+    const cards = [];
+    let skipped = 0;
+    for (const raw of lines) {
+      const line = raw.replace(/\s+$/, '');
+      if (!line.trim()) continue;
+      const parts = line.split('\t');
+      if (parts.length < 2) { skipped++; continue; }
+      const term = parts[0].trim();
+      const definition = parts[1].trim();
+      const image = parts[2] ? parts[2].trim() : '';
+      if (term && definition) {
+        cards.push({ id: genId('card'), term, definition, image: image || null });
+      } else {
+        skipped++;
+      }
+    }
+    return { cards, skipped };
+  }
+
   function escapeHtml(str) {
     return String(str)
       .replace(/&/g, '&amp;')
@@ -165,7 +189,7 @@ const Utils = (() => {
 
   return {
     genId, nowIso, todayKey, dateKeyFromIso, dateKeyOffset, formatDuration, formatDate, formatDateTime, formatTime,
-    nextReviewIso, cardStatus, newCard, defaultProgress, parsePastedDeck, escapeHtml, shuffle,
+    nextReviewIso, cardStatus, newCard, defaultProgress, parsePastedDeck, parsePastedLibraryDeck, escapeHtml, shuffle,
     DEEP_LEARN_INTERVALS_DAYS
   };
 })();
