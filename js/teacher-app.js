@@ -175,6 +175,7 @@ function selectStudent(id) {
   viewMode = 'student';
   selectedStudentId = id;
   teacherActiveTab = 'sessions';
+  statusDeckFilter = null;
   document.getElementById('library-nav-btn').classList.remove('active');
   renderStudentList();
   renderDashboard();
@@ -274,18 +275,20 @@ function renderSessionLogTab(student) {
 // student is using — own decks AND any library decks they've added —
 // so the status table shows everything in one place.
 function buildStatusSections(student) {
-  const ownSections = student.decks.map(d => ({ title: d.title, isLibrary: false, cards: d.cards }));
+  const ownSections = student.decks.map(d => ({ id: 'own:' + d.id, title: d.title, isLibrary: false, cards: d.cards }));
   const libSections = (student.libraryLinks || []).map(link => {
     const libDeck = (data.libraryDecks || []).find(d => d.id === link.libraryDeckId);
     if (!libDeck) return null;
     const cards = libDeck.cards.map(c => {
       const progress = link.progress[c.id] || Utils.defaultProgress();
-      return { id: c.id, term: c.term, definition: c.definition, ...progress };
+      return { id: c.id, term: c.term, definition: c.definition, image: c.image || null, ...progress };
     });
-    return { title: libDeck.title, isLibrary: true, cards };
+    return { id: 'lib:' + libDeck.id, title: libDeck.title, isLibrary: true, cards };
   }).filter(Boolean);
   return [...ownSections, ...libSections];
 }
+
+let statusDeckFilter = null; // which deck's table is shown; reset when switching students
 
 function renderStatusTab(student) {
   const container = document.getElementById('tab-content');
@@ -294,36 +297,53 @@ function renderStatusTab(student) {
     container.innerHTML = '<div class="empty-state"><h3>No decks yet</h3><p>Nothing to show until they create or add a deck.</p></div>';
     return;
   }
+
+  if (!statusDeckFilter || !sections.some(s => s.id === statusDeckFilter)) {
+    statusDeckFilter = sections[0].id;
+  }
+  const activeSection = sections.find(s => s.id === statusDeckFilter);
   const labelMap = { green: 'Mastered', orange: 'Recently correct', red: 'Needs practice', new: 'Not studied yet' };
-  let html = '';
-  sections.forEach((section, di) => {
-    const rows = section.cards.map((card, ci) => {
-      const status = Utils.cardStatus(card);
-      return `
-        <tr>
-          <td>${ci + 1}</td>
-          <td>${Utils.escapeHtml(card.term)}</td>
-          <td class="muted">${Utils.escapeHtml(card.definition)}</td>
-          <td><span class="badge badge-${status}">${labelMap[status]}</span></td>
-          <td>${card.timesSeen}</td>
-          <td>${card.timesCorrect}</td>
-          <td>${Utils.formatDate(card.lastSeenAt)}</td>
-          <td>${card.starred ? '★' : ''}</td>
-        </tr>`;
-    }).join('');
-    html += `
-      <div class="deck-section-title">
-        <h3>Deck ${di + 1} — ${Utils.escapeHtml(section.title)}</h3>
-        ${section.isLibrary ? '<span class="badge badge-purple">Library</span>' : ''}
-        <span class="muted">(${section.cards.length} cards)</span>
-      </div>
-      <table>
-        <thead><tr><th>#</th><th>Term</th><th>Definition</th><th>Status</th><th>Seen</th><th>Correct</th><th>Last seen</th><th>★</th></tr></thead>
-        <tbody>${rows || '<tr><td colspan="8" class="muted">No cards in this deck.</td></tr>'}</tbody>
-      </table>
-    `;
+
+  const filterBarHtml = sections.map(s => `
+    <button class="btn ${s.id === statusDeckFilter ? 'btn-primary' : 'btn-secondary'} btn-sm" data-status-deck="${s.id}">
+      ${Utils.escapeHtml(s.title)}${s.isLibrary ? ' 📚' : ''} (${s.cards.length})
+    </button>
+  `).join('');
+
+  const rows = activeSection.cards.map((card, ci) => {
+    const status = Utils.cardStatus(card);
+    return `
+      <tr>
+        <td>${ci + 1}</td>
+        <td>${Utils.escapeHtml(card.term)}${card.image ? ' 🖼️' : ''}</td>
+        <td class="muted">${Utils.escapeHtml(card.definition)}</td>
+        <td><span class="badge badge-${status}">${labelMap[status]}</span></td>
+        <td>${card.timesSeen}</td>
+        <td>${card.timesCorrect}</td>
+        <td>${Utils.formatDate(card.lastSeenAt)}</td>
+        <td>${card.starred ? '★' : ''}</td>
+      </tr>`;
+  }).join('');
+
+  container.innerHTML = `
+    <div class="row gap-sm" style="flex-wrap:wrap;">${filterBarHtml}</div>
+    <div class="deck-section-title mt-md">
+      <h3>${Utils.escapeHtml(activeSection.title)}</h3>
+      ${activeSection.isLibrary ? '<span class="badge badge-purple">Library</span>' : ''}
+      <span class="muted">(${activeSection.cards.length} cards)</span>
+    </div>
+    <table>
+      <thead><tr><th>#</th><th>Term</th><th>Definition</th><th>Status</th><th>Seen</th><th>Correct</th><th>Last seen</th><th>★</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="8" class="muted">No cards in this deck.</td></tr>'}</tbody>
+    </table>
+  `;
+
+  container.querySelectorAll('[data-status-deck]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      statusDeckFilter = btn.dataset.statusDeck;
+      renderStatusTab(student);
+    });
   });
-  container.innerHTML = html;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -403,7 +423,8 @@ function renderLibraryDeckEditorModal() {
     </div>
     <div class="field">
       <label>Paste terms &amp; definitions — one per line: Term, then a Tab, then Definition</label>
-      <textarea id="lib-editor-paste" placeholder="Newton's First Law&#9;An object stays at rest or moves uniformly unless acted on by a resultant force"></textarea>
+      <p class="muted" style="margin:-4px 0 8px; font-size:13px;">Optionally add a second Tab followed by an image path (e.g. an image you've uploaded to an <span class="mono">images/</span> folder in your repo) to attach a picture to that card.</p>
+      <textarea id="lib-editor-paste" placeholder="Newton's First Law&#9;An object stays at rest or moves uniformly unless acted on by a resultant force&#10;Mitochondria&#9;Produces energy for the cell&#9;images/mitochondria.png"></textarea>
       <div class="row mt-sm">
         <button class="btn btn-secondary btn-sm" id="lib-editor-import-btn">Add pasted cards</button>
         <button class="btn btn-ghost btn-sm" id="lib-editor-add-blank-btn">+ Add card manually</button>
@@ -425,7 +446,7 @@ function renderLibraryDeckEditorModal() {
   document.getElementById('lib-editor-cancel-btn').addEventListener('click', closeLibraryEditor);
   document.getElementById('lib-editor-import-btn').addEventListener('click', handleLibEditorImport);
   document.getElementById('lib-editor-add-blank-btn').addEventListener('click', () => {
-    editingLibDeck.cards.push({ id: Utils.genId('card'), term: '', definition: '' });
+    editingLibDeck.cards.push({ id: Utils.genId('card'), term: '', definition: '', image: null });
     renderLibEditorCardList();
   });
   document.getElementById('lib-editor-save-btn').addEventListener('click', handleLibEditorSave);
@@ -450,17 +471,32 @@ function renderLibEditorCardList() {
   editingLibDeck.cards.forEach((card, i) => {
     const row = document.createElement('div');
     row.className = 'card-row';
+    row.style.alignItems = 'flex-start';
     row.innerHTML = `
-      <div style="flex:1;"><input type="text" data-i="${i}" data-field="term" value="${Utils.escapeHtml(card.term)}" placeholder="Term" /></div>
-      <div style="flex:1;"><input type="text" data-i="${i}" data-field="definition" value="${Utils.escapeHtml(card.definition)}" placeholder="Definition" /></div>
+      <div style="flex:1;">
+        <input type="text" data-i="${i}" data-field="term" value="${Utils.escapeHtml(card.term)}" placeholder="Term" />
+      </div>
+      <div style="flex:1;">
+        <input type="text" data-i="${i}" data-field="definition" value="${Utils.escapeHtml(card.definition)}" placeholder="Definition" />
+      </div>
+      <div style="flex:1;">
+        <input type="text" data-i="${i}" data-field="image" value="${Utils.escapeHtml(card.image || '')}" placeholder="Image path (optional), e.g. images/cell.png" />
+        ${card.image ? `<img src="${Utils.escapeHtml(card.image)}" alt="" style="display:block; max-width:60px; max-height:60px; object-fit:cover; border-radius:6px; margin-top:6px;" onerror="this.style.display='none'" />` : ''}
+      </div>
       <button class="btn-icon btn-ghost" data-del="${i}" title="Delete card">✕</button>
     `;
     list.appendChild(row);
   });
   list.querySelectorAll('input').forEach(inp => {
     inp.addEventListener('input', (e) => {
-      editingLibDeck.cards[parseInt(e.target.dataset.i, 10)][e.target.dataset.field] = e.target.value;
+      const i = parseInt(e.target.dataset.i, 10);
+      const field = e.target.dataset.field;
+      editingLibDeck.cards[i][field] = field === 'image' ? (e.target.value.trim() || null) : e.target.value;
     });
+    // Refresh thumbnails when the image field loses focus, rather than on every keystroke
+    if (inp.dataset.field === 'image') {
+      inp.addEventListener('blur', renderLibEditorCardList);
+    }
   });
   list.querySelectorAll('[data-del]').forEach(btn => {
     btn.addEventListener('click', (e) => {
@@ -472,17 +508,15 @@ function renderLibEditorCardList() {
 
 function handleLibEditorImport() {
   const textarea = document.getElementById('lib-editor-paste');
-  const { cards, skipped } = Utils.parsePastedDeck(textarea.value);
+  const { cards, skipped } = Utils.parsePastedLibraryDeck(textarea.value);
   if (cards.length === 0) {
     showToast('No valid lines found — make sure each line has a Tab between term and definition.');
     return;
   }
-  // Library cards are content-only (no progress fields — that lives per-student).
-  const libCards = cards.map(c => ({ id: c.id, term: c.term, definition: c.definition }));
-  editingLibDeck.cards.push(...libCards);
+  editingLibDeck.cards.push(...cards);
   textarea.value = '';
   renderLibEditorCardList();
-  showToast(`Added ${libCards.length} card${libCards.length === 1 ? '' : 's'}.${skipped ? ' Skipped ' + skipped + ' line(s).' : ''}`);
+  showToast(`Added ${cards.length} card${cards.length === 1 ? '' : 's'}.${skipped ? ' Skipped ' + skipped + ' line(s).' : ''}`);
 }
 
 async function handleLibEditorSave() {
