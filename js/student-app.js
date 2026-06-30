@@ -691,12 +691,11 @@ function renderStudyCard() {
         <div class="flashcard ${session.flipped ? 'flipped' : ''} ${isDeep ? 'deep' : ''}" id="flip-card">
           <div class="flashcard-face flashcard-front">
             <span class="face-label">Term</span>
-            ${card.image ? `<img src="${Utils.escapeHtml(card.image)}" alt="" style="max-width:100%; max-height:120px; object-fit:contain; border-radius:8px; margin-bottom:14px;" onerror="this.style.display='none'" />` : ''}
             <span class="face-text">${Utils.escapeHtml(card.term)}</span>
           </div>
           <div class="flashcard-face flashcard-back">
             <span class="face-label">Definition</span>
-            ${card.image ? `<img src="${Utils.escapeHtml(card.image)}" alt="" style="max-width:100%; max-height:120px; object-fit:contain; border-radius:8px; margin-bottom:14px;" onerror="this.style.display='none'" />` : ''}
+            ${card.image ? `<img src="${Utils.escapeHtml(card.image)}" alt="" style="max-width:100%; max-height:150px; object-fit:contain; border-radius:8px; margin-bottom:14px;" onerror="this.style.display='none'" />` : ''}
             <span class="face-text">${Utils.escapeHtml(card.definition)}</span>
           </div>
         </div>
