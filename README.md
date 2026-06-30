@@ -146,3 +146,33 @@ For each student you can see:
 
 Let me know if you'd like any of these or want the deep-learn intervals
 tuned differently.
+
+# Images for flashcards
+
+Drop any images you want to use on flashcards into this folder (or
+subfolders inside it), then reference them by their path relative to the
+repo root when creating/editing a card in the teacher dashboard's Manage
+library section — for example:
+
+```
+images/cellwall.png
+images/biology/mitochondria.jpg
+```
+
+You can either:
+
+1. **Paste import with a 3rd column** — add a second Tab after the
+   definition, followed by the image path:
+   ```
+   Cell wall<TAB>Rigid outer layer<TAB>images/cellwall.png
+   ```
+2. **Type it directly** into the "Image path" field on an individual card
+   row in the deck editor — a small preview thumbnail will show up once
+   the path is valid.
+
+Images are stored as ordinary files in this repo (not inside the JSON
+data), so they don't bloat your JSONBin storage and load just as fast as
+any other file on your site.
+
+This folder only matters for **library decks** (the ones you create as
+the teacher) — student-created decks don't currently support images.
